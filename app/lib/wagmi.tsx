@@ -1,17 +1,20 @@
-// app/lib/wagmi.ts
+'use client'
+
 import { http } from 'viem'
 import { WagmiProvider, createConfig } from 'wagmi'
 import { injected } from 'wagmi/connectors'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import React from 'react'
 
 export const abstractSepolia = {
   id: 11124,
   name: 'Abstract Sepolia',
   nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: [process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'] } },
+  rpcUrls: {
+    default: { http: [process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'] },
+  },
 } as const
 
-// Wagmi v2-style config
 export const config = createConfig({
   chains: [abstractSepolia],
   connectors: [injected()],
@@ -20,8 +23,8 @@ export const config = createConfig({
   },
 })
 
-// Simple Providers wrapper used by the embed layout
 const queryClient = new QueryClient()
+
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <WagmiProvider config={config}>
