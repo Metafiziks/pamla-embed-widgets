@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
 
     // Chunk to avoid block gas limits
     const chunkSize = 150
-    const chunks: readonly `0x${string}`[][] = []
+    const chunks: (`0x${string}`[])[] = []
     for (let i = 0; i < valid.length; i += chunkSize) {
       chunks.push(valid.slice(i, i + chunkSize))
     }
