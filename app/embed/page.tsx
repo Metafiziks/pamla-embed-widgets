@@ -39,7 +39,15 @@ export default function Embed() {
     setBusy(true)
     try {
       const value = parseEther(ethIn || '0.01')
-      await wallet!.writeContract({ address: curve, abi: BondingCurveABI, functionName: 'buyExactEth', args: [0n], value })
+      await wallet!.writeContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: BondingCurveABI,
+      functionName: 'buyExactEth',
+      args: [0n],
+      value,
+    })
       alert('Buy sent')
     } catch (e:any) { alert(e?.shortMessage || e?.message || 'Buy failed') } finally { setBusy(false) }
   }
@@ -50,7 +58,14 @@ export default function Embed() {
     setBusy(true)
     try {
       const amountIn = parseEther(tokIn || '10')
-      await wallet!.writeContract({ address: curve, abi: BondingCurveABI, functionName: 'sellTokens', args: [amountIn, 0n] })
+      await wallet!.writeContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: BondingCurveABI,
+      functionName: 'sellTokens',
+      args: [amountIn, 0n],
+    })
       alert('Sell sent')
     } catch (e:any) { alert(e?.shortMessage || e?.message || 'Sell failed') } finally { setBusy(false) }
   }
