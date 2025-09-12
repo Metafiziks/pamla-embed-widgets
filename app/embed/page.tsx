@@ -19,9 +19,10 @@ export default function Embed() {
   const chain = Number(qs.get('chain') || defaultChain)
 
   const { connect, connectors } = useConnect()
-  const { address, isConnected } = useAccount()const injectedConnector =
+  const { address, isConnected } = useAccount()
+
   const injectedConnector =
-  connectors.find((c: any) => c.type === 'injected') ?? connectors[0]
+    connectors.find((c: any) => c.type === 'injected') ?? connectors[0]
 
   const [ethIn, setEthIn] = useState('0.01')
   const [tokIn, setTokIn] = useState('10')
