@@ -88,10 +88,11 @@ let firstHash: `0x${string}` | undefined
 
 for (const batch of batches) {
   const txHash = await wallet.writeContract({
-    address: acl,
+    chain, // ✅ satisfy viem types
+    address: acl as `0x${string}`,
     abi: AccessControllerABI,
     functionName: 'setAllowlistBatch',
-    args: [batch, allowBool],
+    args: [batch as readonly `0x${string}`[], allowBool],
   }) as `0x${string}`
 
   if (!firstHash) firstHash = txHash
