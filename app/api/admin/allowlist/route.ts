@@ -30,16 +30,17 @@ export async function POST(req: NextRequest) {
 let firstHash: `0x${string}` | undefined
 for (const chunk of chunks) {
   // Coerce to the literal 0x-string type viem expects
-  const typed = chunk.map(a => a as `0x${string}`) as readonly `0x${string}`[]
+const typed = chunk.map(a => a as `0x${string}`) as readonly `0x${string}`[]
 
-  const hash = await wallet.writeContract({
-    address: acl as `0x${string}`,
-    abi: AccessControllerABI,
-    functionName: 'setAllowlistBatch',
-    args: [typed, allow],
-  })
-  if (!firstHash) firstHash = hash
-}
+const hash = await wallet.writeContract({
+  account,
+  chain: abstractSepolia,
+  address: acl as `0x${string}`,
+  abi: AccessControllerABI,
+  functionName: 'setAllowlistBatch',
+  args: [typed, allow],
+})
+if (!firstHash) firstHash = hash
 
     return NextResponse.json({ ok: true, txCount: chunks.length, firstHash })
   } catch (e:any) {
