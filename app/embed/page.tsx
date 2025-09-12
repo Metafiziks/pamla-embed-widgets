@@ -19,8 +19,9 @@ export default function Embed() {
   const chain = Number(qs.get('chain') || defaultChain)
 
   const { connect, connectors } = useConnect()
-  const { address, isConnected } = useAccount()
-  const injectedConnector = connectors.find(c => c.id === injected({}).id)
+  const { address, isConnected } = useAccount()const injectedConnector =
+  const injectedConnector =
+  connectors.find((c: any) => c.type === 'injected') ?? connectors[0]
 
   const [ethIn, setEthIn] = useState('0.01')
   const [tokIn, setTokIn] = useState('10')
@@ -74,7 +75,9 @@ export default function Embed() {
 
       <div className="card">
         {!isConnected ? (
-          <button onClick={()=>connect({ connector: injectedConnector })}>Connect Wallet</button>
+          <button onClick={() => connect({ connector: injectedConnector })}>
+  Connect Wallet
+</button>
         ) : (
           <div style={{fontSize:12, opacity:.8}}>Connected: {address?.slice(0,6)}…{address?.slice(-4)}</div>
         )}
