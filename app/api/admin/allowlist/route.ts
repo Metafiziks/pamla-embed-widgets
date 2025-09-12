@@ -83,20 +83,21 @@ export async function POST(req: NextRequest) {
     const wallet = createWalletClient({ account, chain, transport: http(RPC_URL) })
 
     // --- Send in chunks ---
-    const batches = chunk(valid, 50)
-    let firstHash: `0x${string}` | undefined
+const batches = chunk(valid, 50)
+let firstHash: `0x${string}` | undefined
 
-    for (const batch of batches) {
-      const { hash } = await wallet.writeContract({
-        address: acl,
-        abi: AccessControllerABI,
-        functionName: 'setAllowlistBatch',
-        args: [batch, allowBool],
-      })
-      if (!firstHash) firstHash = hash
-    }
+for (const batch of batches) {
+  const txHash = await wallet.writeContract({
+    address: acl,
+    abi: AccessControllerABI,
+    functionName: 'setAllowlistBatch',
+    args: [batch, allowBool],
+  }) as `0x${string}`
 
-    return NextResponse.json({ ok: true, txCount: batches.length, firstHash })
+  if (!firstHash) firstHash = txHash
+}
+
+return NextResponse.json({ ok: true, txCount: batches.length, firstHash })
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Internal error' }, { status: 500 })
   }
