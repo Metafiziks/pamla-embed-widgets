@@ -1,8 +1,9 @@
+// app/api/admin/allowlist/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { createWalletClient, http, isAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { AccessControllerABI } from '@/lib/abi'
-import { abstractSepolia } from '@/lib/wagmi'
+import { AccessControllerABI } from '../../../../lib/abi'
+import { abstractSepolia } from '../../../../lib/wagmi'
 
 const RPC_URL = process.env.RPC_URL || 'https://api.testnet.abs.xyz'
 const ADMIN_PRIVATE_KEY = process.env.ADMIN_PRIVATE_KEY
