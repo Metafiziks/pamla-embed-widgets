@@ -1,6 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
 
+export const dynamic = 'force-dynamic'
+
 function parseAddresses(text: string): string[] {
   const parts = text.split(/\r?\n|,|\s+/).map(s=>s.trim()).filter(Boolean)
   const uniq = Array.from(new Set(parts))

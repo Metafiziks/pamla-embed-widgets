@@ -8,6 +8,8 @@ import { abstractSepolia } from '../../lib/wagmi'
 import { BondingCurveABI } from '../../lib/abi'
 import TradeChart from '../../components/TradeChart'
 
+export const dynamic = 'force-dynamic'
+
 export default function Embed() {
   const qs = useSearchParams()
   const admin = qs.get('admin') === '1'
