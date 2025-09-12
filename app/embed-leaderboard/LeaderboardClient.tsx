@@ -161,7 +161,7 @@ if (typeof p !== 'number') {
         if (!cancelled) setLoading(false)
       }
     })()
-    return () => { cancelled = True }
+    return () => { cancelled = true }
   }, [curve, pointsMgr, pams, acl, absClient, ethClient, lookback])
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
