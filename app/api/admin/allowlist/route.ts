@@ -88,7 +88,8 @@ let firstHash: `0x${string}` | undefined
 
 for (const batch of batches) {
   const txHash = await wallet.writeContract({
-    chain, // ✅ satisfy viem types
+    account,            // ✅ provide the signer account
+    chain,              // ✅ satisfy viem chain typing
     address: acl as `0x${string}`,
     abi: AccessControllerABI,
     functionName: 'setAllowlistBatch',
