@@ -11,6 +11,14 @@ import TradeChart from '../../components/TradeChart'
 export const dynamic = 'force-dynamic'
 
 export default function Embed() {
+  return (
+    <Suspense fallback={null}>
+      <EmbedInner />
+    </Suspense>
+  )
+}
+
+function EmbedInner() {
   const qs = useSearchParams()
   const admin = qs.get('admin') === '1'
 
@@ -112,72 +120,68 @@ export default function Embed() {
 
   if (!curve) {
     return (
-      <Suspense fallback={null}>
-        <div style={{ color: '#fff' }}>
-          Missing curve address. Pass <code>?curve=0x...</code> or set <code>NEXT_PUBLIC_DEFAULT_CURVE</code>.
-        </div>
-      </Suspense>
+      <div style={{ color: '#fff' }}>
+        Missing curve address. Pass <code>?curve=0x...</code> or set <code>NEXT_PUBLIC_DEFAULT_CURVE</code>.
+      </div>
     )
   }
 
   return (
-    <Suspense fallback={null}>
-      <div style={{ fontFamily: 'ui-sans-serif,system-ui,Arial', color: '#f2f2f2' }}>
-        {admin && (
-          <div className="card" style={{ background: '#0e0e10', marginBottom: 12 }}>
-            <b>Admin Embed</b>
-            <div style={{ marginTop: 8 }}>
-              <button
-                onClick={async () => {
-                  await navigator.clipboard.writeText(iframeCode)
-                  alert('Embed code copied!')
-                }}
-              >
-                Copy iframe
-              </button>
-            </div>
-            <pre style={{ whiteSpace: 'pre-wrap', marginTop: 8, fontSize: 12, opacity: 0.85 }}>{iframeCode}</pre>
+    <div style={{ fontFamily: 'ui-sans-serif,system-ui,Arial', color: '#f2f2f2' }}>
+      {admin && (
+        <div className="card" style={{ background: '#0e0e10', marginBottom: 12 }}>
+          <b>Admin Embed</b>
+          <div style={{ marginTop: 8 }}>
+            <button
+              onClick={async () => {
+                await navigator.clipboard.writeText(iframeCode)
+                alert('Embed code copied!')
+              }}
+            >
+              Copy iframe
+            </button>
+          </div>
+          <pre style={{ whiteSpace: 'pre-wrap', marginTop: 8, fontSize: 12, opacity: 0.85 }}>{iframeCode}</pre>
+        </div>
+      )}
+
+      <div className="card">
+        {!isConnected ? (
+          <button onClick={() => connect({ connector: injectedConnector })}>Connect Wallet</button>
+        ) : (
+          <div style={{ fontSize: 12, opacity: 0.8 }}>
+            Connected: {address?.slice(0, 6)}…{address?.slice(-4)}
           </div>
         )}
-
-        <div className="card">
-          {!isConnected ? (
-            <button onClick={() => connect({ connector: injectedConnector })}>Connect Wallet</button>
-          ) : (
-            <div style={{ fontSize: 12, opacity: 0.8 }}>
-              Connected: {address?.slice(0, 6)}…{address?.slice(-4)}
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
-            <div style={{ flex: 1 }}>
-              <label>Buy with ETH</label>
-              <input value={ethIn} onChange={(e) => setEthIn(e.target.value)} />
-              <button onClick={doBuy} disabled={busy} style={{ marginTop: 8 }}>
-                Buy
-              </button>
-            </div>
-            <div style={{ flex: 1 }}>
-              <label>Sell tokens</label>
-              <input value={tokIn} onChange={(e) => setTokIn(e.target.value)} />
-              <button onClick={doSell} disabled={busy} style={{ marginTop: 8 }}>
-                Sell
-              </button>
-            </div>
+        <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label>Buy with ETH</label>
+            <input value={ethIn} onChange={(e) => setEthIn(e.target.value)} />
+            <button onClick={doBuy} disabled={busy} style={{ marginTop: 8 }}>
+              Buy
+            </button>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label>Sell tokens</label>
+            <input value={tokIn} onChange={(e) => setTokIn(e.target.value)} />
+            <button onClick={doSell} disabled={busy} style={{ marginTop: 8 }}>
+              Sell
+            </button>
           </div>
         </div>
-
-        <div className="card">
-          <b>Live Trades</b>
-          <TradeChart address={curve} />
-        </div>
-
-        <style>{`
-          .card{border:1px solid #222;padding:16px;border-radius:16px;background:#0e0e10;margin-bottom:12px}
-          button{padding:8px 12px;border:1px solid #333;background:#111;color:#fff;border-radius:8px;cursor:pointer}
-          input,label{display:block}
-          input{width:100%;background:#0f0f11;color:#fff;border:1px solid #333;border-radius:8px;padding:8px;margin-top:4px}
-        `}</style>
       </div>
-    </Suspense>
+
+      <div className="card">
+        <b>Live Trades</b>
+        <TradeChart address={curve} />
+      </div>
+
+      <style>{`
+        .card{border:1px solid #222;padding:16px;border-radius:16px;background:#0e0e10;margin-bottom:12px}
+        button{padding:8px 12px;border:1px solid #333;background:#111;color:#fff;border-radius:8px;cursor:pointer}
+        input,label{display:block}
+        input{width:100%;background:#0f0f11;color:#fff;border:1px solid #333;border-radius:8px;padding:8px;margin-top:4px}
+      `}</style>
+    </div>
   )
 }
