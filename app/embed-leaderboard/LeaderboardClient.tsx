@@ -48,6 +48,15 @@ export default function LeaderboardClient() {
   const [error, setError] = useState<string | null>(null)
   const [phase, setPhase] = useState<number | undefined>(undefined)
 
+  // NEW: detect ?admin=1 on the client
+  const [isAdmin, setIsAdmin] = useState(false)
+  useEffect(() => {
+    try {
+      const qp = new URLSearchParams(window.location.search)
+      setIsAdmin(qp.get('admin') === '1')
+    } catch {}
+  }, [])
+
   const absClient = useMemo(() => createPublicClient({ chain: abstractSepolia as any, transport: http(absRpc) }), [absRpc])
   const ethClient = useMemo(() => mainnetRpc ? createPublicClient({ chain: mainnet, transport: http(mainnetRpc) }) : null, [mainnetRpc])
 
@@ -61,20 +70,20 @@ export default function LeaderboardClient() {
         if (acl) {
           try {
             let p = await absClient.readContract({
-  address: acl,
-  abi: AccessControllerABI as any,
-  functionName: 'getPhase',
-  args: [], // ✅ required, even if empty
-}) as any
+              address: acl,
+              abi: AccessControllerABI as any,
+              functionName: 'getPhase',
+              args: [],
+            }) as any
 
-if (typeof p !== 'number') {
-  p = await absClient.readContract({
-    address: acl,
-    abi: AccessControllerABI as any,
-    functionName: 'phase',
-    args: [], // ✅ required
-  }) as any
-}
+            if (typeof p !== 'number') {
+              p = await absClient.readContract({
+                address: acl,
+                abi: AccessControllerABI as any,
+                functionName: 'phase',
+                args: [],
+              }) as any
+            }
             if (!cancelled) setPhase(Number(p))
           } catch { /* ignore */ }
         }
@@ -172,15 +181,25 @@ if (typeof p !== 'number') {
 
   return (
     <div style={{fontFamily:'ui-sans-serif,system-ui,Arial', color:'#f2f2f2'}}>
+      {/* Title bar with phase visible to everyone */}
       <div className="card" style={{background:'#0e0e10', marginBottom:12}}>
-        <b>Admin Leaderboard Embed</b>
-        <div style={{marginTop:8}}>
-          <button onClick={async()=>{ await navigator.clipboard.writeText(iframeCode); alert('Embed code copied!')}}>Copy iframe</button>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+          <b>Leaderboard</b>
+          <div style={{fontSize:12, opacity:.8}}>
+            Phase: <b>{phaseLabel(phase)}</b>
+          </div>
         </div>
-        <pre style={{whiteSpace:'pre-wrap', marginTop:8, fontSize:12, opacity:.85}}>{iframeCode}</pre>
-        <div style={{fontSize:12, opacity:.8, marginTop:8}}>
-          Phase: <b>{phaseLabel(phase)}</b>
-        </div>
+
+        {/* Admin-only embed helper */}
+        {isAdmin && (
+          <div style={{marginTop:12}}>
+            <div style={{fontSize:12, opacity:.9, marginBottom:6}}><b>Admin Leaderboard Embed</b></div>
+            <button onClick={async()=>{ await navigator.clipboard.writeText(iframeCode); alert('Embed code copied!')}}>
+              Copy iframe
+            </button>
+            <pre style={{whiteSpace:'pre-wrap', marginTop:8, fontSize:12, opacity:.85}}>{iframeCode}</pre>
+          </div>
+        )}
       </div>
 
       {loading && <div>Loading…</div>}
