@@ -5,7 +5,7 @@ import { createWalletClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
 // ⚠️ Use relative imports to avoid path alias issues in build
-import { AccessControllerABI } from '../../../lib/abi'
+import { AccessControllerABI } from '../../lib/abi'
 
 // Ensure Node runtime (Edge lacks some crypto/node APIs we need)
 export const runtime = 'nodejs'
