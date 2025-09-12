@@ -8,11 +8,16 @@
     "start": "next start"
   },
   "dependencies": {
+    "@wagmi/connectors": "4.1.19",
     "next": "14.2.5",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "wagmi": "2.12.10",
     "viem": "2.21.16",
-    "@wagmi/connectors": "4.1.19"
+    "wagmi": "2.12.10"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "@types/react": "^19.1.12",
+    "typescript": "^5.9.2"
   }
 }
