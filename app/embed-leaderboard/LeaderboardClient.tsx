@@ -60,10 +60,21 @@ export default function LeaderboardClient() {
         // Phase
         if (acl) {
           try {
-            let p = await absClient.readContract({ address: acl, abi: AccessControllerABI as any, functionName: 'getPhase' }) as any
-            if (typeof p !== 'number') {
-              p = await absClient.readContract({ address: acl, abi: AccessControllerABI as any, functionName: 'phase' }) as any
-            }
+            let p = await absClient.readContract({
+  address: acl,
+  abi: AccessControllerABI as any,
+  functionName: 'getPhase',
+  args: [], // ✅ required, even if empty
+}) as any
+
+if (typeof p !== 'number') {
+  p = await absClient.readContract({
+    address: acl,
+    abi: AccessControllerABI as any,
+    functionName: 'phase',
+    args: [], // ✅ required
+  }) as any
+}
             if (!cancelled) setPhase(Number(p))
           } catch { /* ignore */ }
         }
