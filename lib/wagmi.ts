@@ -1,6 +1,7 @@
+// import { injected } from '@wagmi/connectors'
 import { createConfig, http } from 'wagmi'
-import { injected } from '@wagmi/connectors'
-import { Chain } from 'viem'
+import { injected } from 'wagmi/connectors'    // ✅ use wagmi/connectors
+import type { Chain } from 'viem'
 
 export const abstractSepolia: Chain = {
   id: 11124,
@@ -12,7 +13,7 @@ export const abstractSepolia: Chain = {
 
 export const config = createConfig({
   chains: [abstractSepolia],
-  connectors: [injected()],
+  connectors: [injected()],                     // ✅ fine now
   transports: {
     [abstractSepolia.id]: http(process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'),
   },

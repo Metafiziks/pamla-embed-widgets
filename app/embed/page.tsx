@@ -2,7 +2,7 @@
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { useAccount, useConnect } from 'wagmi'
-import { injected } from '@wagmi/connectors'
+import { injected } from 'wagmi/connectors'
 import { parseEther, createPublicClient, createWalletClient, http } from 'viem'
 import { abstractSepolia } from '../../lib/wagmi'
 import { BondingCurveABI } from '../../lib/abi'
