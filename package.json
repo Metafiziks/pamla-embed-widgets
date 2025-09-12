@@ -1,0 +1,18 @@
+{
+  "name": "pamla-embed-widgets",
+  "version": "0.5.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "wagmi": "2.12.10",
+    "viem": "2.21.16",
+    "@wagmi/connectors": "4.1.19"
+  }
+}

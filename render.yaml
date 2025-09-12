@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: pamla-embed-widgets
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: ADMIN_PRIVATE_KEY
+        sync: false     # add in Render dashboard (server-only secret)
+      - key: RPC_URL
+        value: https://api.testnet.abs.xyz
+      - key: CHAIN_ID
+        value: 11124
+      - key: NEXT_PUBLIC_DEFAULT_CURVE
+        value: 0x73e97d6cC2339368522De87Faa858818eDA72BC3
+      - key: NEXT_PUBLIC_DEFAULT_ACL
+        value: 0x0C61ffdc84e5f9723c3a01fBa8EB27330D967207
+      - key: NEXT_PUBLIC_DEFAULT_CHAIN
+        value: 11124
+      - key: NEXT_PUBLIC_ABSTRACT_RPC
+        value: https://api.testnet.abs.xyz
+      - key: NEXT_PUBLIC_FRAME_ANCESTORS
+        value: https://soniqute.com
