@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPublicClient, http, formatEther } from 'viem'
 import { mainnet } from 'viem/chains'
-import { BondingCurveABI, ERC721ABI, PointsManagerABI, AccessControllerABI } from '../lib/abi'
+import { BondingCurveABI, ERC721ABI, PointsManagerABI, AccessControllerABI } from '../../lib/abi'
+
 
 // Minimal chain object for Abstract Sepolia
 const abstractSepolia = {
