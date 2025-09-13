@@ -1,4 +1,15 @@
 // Centralized ABIs for widgets
+
+export const ERC721ABI = [
+  {
+    type: 'function',
+    name: 'balanceOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'owner', type: 'address' }],
+    outputs: [{ name: 'balance', type: 'uint256' }],
+  },
+] as const;
+
 export const BondingCurveABI = [
   { type: 'function', name: 'buyExactEth', stateMutability: 'payable', inputs: [{ name: 'minTokensOut', type: 'uint256' }], outputs: [] },
   { type: 'function', name: 'sellTokens', stateMutability: 'nonpayable', inputs: [{ name: 'amountIn', type: 'uint256' }, { name: 'minEthOut', type: 'uint256' }], outputs: [] },
@@ -19,8 +30,4 @@ export const AccessControllerABI = [
 export const PointsManagerABI = [
   { type: 'function', name: 'pointsOf', stateMutability: 'view', inputs: [{ name: 'user', type: 'address' }], outputs: [{ name: 'points', type: 'uint256' }] },
   { type: 'function', name: 'points', stateMutability: 'view', inputs: [{ name: 'user', type: 'address' }], outputs: [{ name: 'points', type: 'uint256' }] },
-]
-
-export const ERC721ABI = [
-  { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ name: 'balance', type: 'uint256' }] },
 ]
