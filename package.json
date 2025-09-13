@@ -1,5 +1,6 @@
 {
   "name": "pamla-embed-widgets",
+  "type": "module",
   "version": "0.5.0",
   "private": true,
   "scripts": {
@@ -9,6 +10,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.87.4",
+    "dotenv": "^17.2.2",
     "next": "14.2.5",
     "react": "18.2.0",
     "react-dom": "18.2.0",

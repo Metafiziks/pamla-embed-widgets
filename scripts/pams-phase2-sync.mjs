@@ -1,157 +1,189 @@
 // scripts/pams-phase2-sync.mjs
-// Usage: node scripts/pams-phase2-sync.mjs
-// Reads all current PaMs holders on Ethereum mainnet, confirms balance>0,
-// then adds them to ACL allowlist on Abstract Sepolia, THEN sets phase=2.
-//
-// ⚠️ Requires env vars (see below).
+// Run with: node scripts/pams-phase2-sync.mjs
 
-import { createPublicClient, createWalletClient, http, isAddress, getAddress } from 'viem'
-import { mainnet } from 'viem/chains'
+import 'dotenv/config'
+import { createWalletClient, createPublicClient, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { abstractSepolia } from '../lib/chain-abstract.js'
+import { SongTokenRegistryABI, AccessControllerABI, ERC721ABI } from '../lib/abi.js'
 
-// Minimal Abstract Sepolia chain
-const abstractSepolia = {
-  id: 11124,
-  name: 'abstract-sepolia',
-  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: ['https://api.testnet.abs.xyz'] } },
-}
-
-// --- ENV ---
+/** ========== ENV ========== */
 const {
-  // mainnet (for PaMs)
-  MAINNET_RPC_URL,
-  PAMS_NFT, // PaMs ERC-721 on ETH mainnet
+  // mainnet data source for PaMs holders
+  ETHERSCAN_API_KEY,
 
-  // abstract
-  RPC_URL, // Abstract Sepolia RPC
-  CHAIN_ID = '11124',
-  ACCESS_CONTROLLER, // ACL address on Abstract
-  ADMIN_PRIVATE_KEY, // burner/admin with ACL perms (same as your /admin-allowlist api key)
+  // contracts
+  NEXT_PUBLIC_PAMS_NFT,          // PaMs ERC-721 (mainnet)
+  NEXT_PUBLIC_ACCESS_CONTROLLER,  // ACL on Abstract Sepolia
+  REGISTRY_ADDRESS,               // ✅ SongTokenRegistry on Abstract Sepolia
 
-  // optional
-  TRANSFER_LOOKBACK = '100000', // how many blocks back to scan PaMs transfers
+  // Abstract RPC + signer
+  RPC_URL,                        // Abstract Sepolia RPC (e.g. https://api.testnet.abs.xyz)
+  ADMIN_PRIVATE_KEY,              // has ACL_OWNER perms OR Registry owner
+
+  // optional verification & tuning
+  NEXT_PUBLIC_MAINNET_RPC,       // mainnet RPC (Infura/Alchemy) for balanceOf verification
+  VERIFY_BALANCE = 'true',       // "true"/"false" — verify with balanceOf (recommended)
+  BATCH_SIZE = '200',            // how many addresses per allowlist tx
+  PAGE_SIZE = '1000',            // etherscan page size (max 1000)
+  SLEEP_MS = '250'               // pause between etherscan pages to be nice
 } = process.env
 
-function req(name, v) {
-  if (!v) { console.error(`Missing required env: ${name}`); process.exit(1) }
-  return v
-}
-req('MAINNET_RPC_URL', MAINNET_RPC_URL)
-req('PAMS_NFT', PAMS_NFT)
-req('RPC_URL', RPC_URL)
-req('ACCESS_CONTROLLER', ACCESS_CONTROLLER)
-req('ADMIN_PRIVATE_KEY', ADMIN_PRIVATE_KEY)
-
-const AccessControllerABI = [
-  { type:'function', name:'setAllowlistBatch', stateMutability:'nonpayable',
-    inputs:[{name:'accts', type:'address[]'},{name:'allow', type:'bool'}], outputs:[] },
-  { type:'function', name:'setPhase', stateMutability:'nonpayable',
-    inputs:[{name:'p', type:'uint8'}], outputs:[] },
-  { type:'function', name:'getPhase', stateMutability:'view',
-    inputs:[], outputs:[{type:'uint8'}] },
-  { type:'function', name:'isAllowlisted', stateMutability:'view',
-    inputs:[{name:'a', type:'address'}], outputs:[{type:'bool'}] },
-]
-
-// Minimal ERC-721 ABI
-const ERC721ABI = [
-  { type:'function', name:'balanceOf', stateMutability:'view',
-    inputs:[{name:'owner', type:'address'}], outputs:[{type:'uint256'}] },
-  { type:'event', name:'Transfer', inputs:[
-    { indexed:true, name:'from', type:'address' },
-    { indexed:true, name:'to', type:'address' },
-    { indexed:false, name:'tokenId', type:'uint256' },
-  ]}
-]
-
-function uniq(arr) { return [...new Set(arr)] }
-
-async function main() {
-  console.log('== PaMs → ACL allowlist sync, then set phase=2 ==')
-
-  // Clients
-  const eth = createPublicClient({ chain: mainnet, transport: http(MAINNET_RPC_URL) })
-  const absPub = createPublicClient({ chain: abstractSepolia, transport: http(RPC_URL) })
-  const absWallet = createWalletClient({
-    chain: abstractSepolia,
-    transport: http(RPC_URL),
-    account: (await import('viem/accounts')).privateKeyToAccount(ADMIN_PRIVATE_KEY),
-  })
-
-  const acl = getAddress(ACCESS_CONTROLLER)
-  const pams = getAddress(PAMS_NFT)
-
-  // Discover recent holders from PaMs Transfer logs
-  const latest = await eth.getBlockNumber()
-  const fromBlock = latest - BigInt(TRANSFER_LOOKBACK)
-  console.log(`Scanning PaMs transfers from block ${fromBlock} to ${latest}...`)
-  const logs = await eth.getLogs({
-    address: pams,
-    event: ERC721ABI[1], // Transfer
-    fromBlock,
-    toBlock: latest,
-  })
-
-  const candidates = new Set()
-  for (const lg of logs) {
-    const args = (lg).args || {}
-    const to = args.to
-    // ignore mint/burn zero
-    if (to && to.toLowerCase() !== '0x0000000000000000000000000000000000000000') {
-      if (isAddress(to)) candidates.add(getAddress(to))
-    }
+function requireEnv(name, val) {
+  if (!val || String(val).trim() === '') {
+    throw new Error(`❌ Missing env var: ${name}`)
   }
-  const rough = uniq([...candidates])
-  console.log(`Found ${rough.length} recent receivers; confirming balanceOf > 0...`)
+}
 
-  // Confirm balance > 0 to avoid stale receivers who no longer hold
-  const holders = []
-  for (const addr of rough) {
+requireEnv('ETHERSCAN_API_KEY', ETHERSCAN_API_KEY)
+requireEnv('NEXT_PUBLIC_PAMS_NFT', NEXT_PUBLIC_PAMS_NFT)
+requireEnv('NEXT_PUBLIC_ACCESS_CONTROLLER', NEXT_PUBLIC_ACCESS_CONTROLLER)
+requireEnv('REGISTRY_ADDRESS', REGISTRY_ADDRESS)
+requireEnv('RPC_URL', RPC_URL)
+requireEnv('ADMIN_PRIVATE_KEY', ADMIN_PRIVATE_KEY)
+
+// signer on Abstract Sepolia
+const account = privateKeyToAccount(ADMIN_PRIVATE_KEY)
+const abs = createWalletClient({ account, chain: abstractSepolia, transport: http(RPC_URL) })
+const absReader = createPublicClient({ chain: abstractSepolia, transport: http(RPC_URL) })
+
+// optional mainnet client to verify balanceOf
+let mainnetReader = null
+if (VERIFY_BALANCE === 'true') {
+  requireEnv('NEXT_PUBLIC_MAINNET_RPC', NEXT_PUBLIC_MAINNET_RPC)
+  mainnetReader = createPublicClient({ chain: { id: 1, name: 'mainnet', nativeCurrency: { name:'ETH', symbol:'ETH', decimals:18 }, rpcUrls: { default: { http: [NEXT_PUBLIC_MAINNET_RPC] } } }, transport: http(NEXT_PUBLIC_MAINNET_RPC) })
+}
+
+const BATCH = Number(BATCH_SIZE)
+const PAGE = Number(PAGE_SIZE)
+const PAUSE = Number(SLEEP_MS)
+
+const sleep = (ms) => new Promise(res => setTimeout(res, ms))
+
+/** Fetch all current holder addresses from Etherscan (paged) */
+async function getAllEtherscanHolders() {
+  let page = 1
+  const out = new Set()
+
+  // Etherscan tokenholderlist returns up to 1000 per page
+  while (true) {
+    const url = `https://api.etherscan.io/api?module=token&action=tokenholderlist&contractaddress=${NEXT_PUBLIC_PAMS_NFT}&page=${page}&offset=${PAGE}&apikey=${ETHERSCAN_API_KEY}`
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`Etherscan HTTP ${res.status}`)
+    const json = await res.json()
+    if (json.status !== '1') {
+      // If no more pages, Etherscan returns status "0" + message "No data found"
+      if (json.message?.toLowerCase().includes('no data')) break
+      throw new Error(`Etherscan error (page ${page}): ${json.message || json.result}`)
+    }
+
+    const list = json.result || []
+    if (list.length === 0) break
+
+    for (const row of list) {
+      const addr = row.TokenHolderAddress
+      if (addr && addr !== '0x0000000000000000000000000000000000000000') out.add(addr)
+    }
+
+    console.log(`→ Page ${page}: got ${list.length} holders (total so far ${out.size})`)
+    page += 1
+    await sleep(PAUSE) // be gentle with the API
+  }
+
+  return [...out]
+}
+
+/** Optionally verify each address still holds at least 1 PaMs (avoid stale sellers) */
+async function filterCurrentHolders(addresses) {
+  if (!mainnetReader) return addresses
+  console.log(`→ Verifying current balances via balanceOf() on mainnet…`)
+  const verified = []
+  for (let i = 0; i < addresses.length; i++) {
+    const who = addresses[i]
     try {
-      const bal = await eth.readContract({
-        address: pams,
+      const bal = await mainnetReader.readContract({
+        address: NEXT_PUBLIC_PAMS_NFT,
         abi: ERC721ABI,
         functionName: 'balanceOf',
-        args: [addr],
+        args: [who]
       })
-      if (bal && BigInt(bal) > 0n) holders.push(addr)
-    } catch {}
-  }
-  console.log(`Confirmed ${holders.length} current PaMs holders`)
-
-  if (!holders.length) {
-    console.log('No holders found; skipping allowlist update, setting phase=2 anyway...')
-  } else {
-    // Chunk and call setAllowlistBatch
-    const chunkSize = 400
-    let txCount = 0
-    for (let i=0; i<holders.length; i+=chunkSize) {
-      const batch = holders.slice(i, i+chunkSize)
-      const txHash = await absWallet.writeContract({
-        address: acl,
-        abi: AccessControllerABI,
-        functionName: 'setAllowlistBatch',
-        args: [batch, true],
-        chain: abstractSepolia,
-      })
-      txCount++
-      console.log(`Allowlisted batch ${txCount} (size ${batch.length}): ${txHash}`)
+      if ((bal ?? 0n) > 0n) verified.push(who)
+    } catch (e) {
+      // if call fails, just skip this address
     }
+    // light throttle to avoid RPC bans
+    if (i % 50 === 0) await sleep(50)
   }
-
-  // Set phase = 2 (PaMs OR allowlist, achieved via allowlisting PaMs)
-  const setPhaseTx = await absWallet.writeContract({
-    address: acl,
-    abi: AccessControllerABI,
-    functionName: 'setPhase',
-    args: [2],
-    chain: abstractSepolia,
-  })
-  console.log(`Phase set to 2: ${setPhaseTx}`)
-  console.log('🎉 Done. Phase 2 now effectively “PaMs OR Allowlist”.')
+  console.log(`→ ${verified.length}/${addresses.length} still hold PaMs`)
+  return verified
 }
 
-main().catch((e) => {
-  console.error(e)
+/** Batch a large array */
+function chunk(arr, n) {
+  const out = []
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+  return out
+}
+
+async function main() {
+  console.log('== PaMs → ACL allowlist sync (via Etherscan), then set phase=2 ==')
+
+  // 0) Confirm ACL owner/permissions (optional but nice)
+  try {
+    const owner = await absReader.readContract({
+      address: NEXT_PUBLIC_ACCESS_CONTROLLER,
+      abi: AccessControllerABI,
+      functionName: 'owner',
+      args: []
+    })
+    console.log(`ACL owner: ${owner}`)
+  } catch {
+    console.log('⚠️ Could not read ACL owner (non-fatal)')
+  }
+
+  // 1) Fetch holders
+  const raw = await getAllEtherscanHolders()
+  if (raw.length === 0) {
+    console.log('⚠️ No PaMs holders found. Aborting.')
+    return
+  }
+  console.log(`→ Found ${raw.length} PaMs holder addresses (raw)`)
+
+  // 2) Optional: verify still holders
+  const holders = await filterCurrentHolders(raw)
+  if (holders.length === 0) {
+    console.log('⚠️ After verification, no current holders. Aborting.')
+    return
+  }
+
+  // 3) Forward allowlist via the Registry helper (batches)
+  const batches = chunk(holders, BATCH)
+  console.log(`→ Forwarding ${holders.length} allowlist entries in ${batches.length} txs (batch=${BATCH})`)
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i]
+    console.log(`   • Tx ${i + 1}/${batches.length} for ${batch.length} addrs`)
+    await abs.writeContract({
+      address: REGISTRY_ADDRESS,
+      abi: SongTokenRegistryABI,
+      functionName: 'forwardAllowlist',
+      args: [NEXT_PUBLIC_ACCESS_CONTROLLER, batch, true],
+    })
+    await sleep(250) // tiny gap between writes
+  }
+
+  // 4) Set phase = 2 (PaMs OR allowlisted)
+  console.log('→ Setting phase=2')
+  await abs.writeContract({
+    address: REGISTRY_ADDRESS,
+    abi: SongTokenRegistryABI,
+    functionName: 'forwardSetPhase',
+    args: [NEXT_PUBLIC_ACCESS_CONTROLLER, 2],
+  })
+
+  console.log('🎉 PaMs imported + Phase set to 2')
+}
+
+main().catch(err => {
+  console.error('❌ Error', err)
   process.exit(1)
 })
