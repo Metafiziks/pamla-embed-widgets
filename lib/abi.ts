@@ -1,84 +1,68 @@
 // lib/abi.ts
 
-// ---- AccessController ABI (only what's used) ----
-export const AccessControllerABI = [
-  // setPhase(uint8)
+// --- Minimal ERC-721 (balanceOf only) ---
+export const ERC721ABI = [
   {
-    type: "function",
-    name: "setPhase",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "p", type: "uint8" }],
-    outputs: [],
-  },
-  // setAllowlistBatch(address[] addrs, bool allow)
-  {
-    type: "function",
-    name: "setAllowlistBatch",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "addrs", type: "address[]" },
-      { name: "allow", type: "bool" },
-    ],
-    outputs: [],
-  },
-  // Optional helpers (not strictly required for your API)
-  {
-    type: "function",
-    name: "phase",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint8" }],
-  },
-  {
-    type: "function",
-    name: "isAllowed",
-    stateMutability: "view",
-    inputs: [{ name: "a", type: "address" }],
-    outputs: [{ name: "", type: "bool" }],
+    type: 'function',
+    name: 'balanceOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'owner', type: 'address' }],
+    outputs: [{ name: 'balance', type: 'uint256' }],
   },
 ] as const;
 
-// ---- BondingCurveToken ABI (only what's used by the widget) ----
-export const BondingCurveABI = [
-  // buyExactEth(uint256 minTokensOut) payable
+// --- AccessController (reads used in UI) ---
+export const AccessControllerABI = [
   {
-    type: "function",
-    name: "buyExactEth",
-    stateMutability: "payable",
-    inputs: [{ name: "minTokensOut", type: "uint256" }],
+    type: 'function',
+    name: 'getPhase',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: 'p', type: 'uint8' }],
+  },
+  {
+    type: 'function',
+    name: 'phase',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: 'p', type: 'uint8' }],
+  },
+  {
+    type: 'function',
+    name: 'isAllowlisted',
+    stateMutability: 'view',
+    inputs: [{ name: 'who', type: 'address' }],
+    outputs: [{ name: 'ok', type: 'bool' }],
+  },
+] as const;
+
+// --- BondingCurve (functions used by the embed) ---
+export const BondingCurveABI = [
+  {
+    type: 'function',
+    name: 'buyExactEth',
+    stateMutability: 'payable',
+    inputs: [{ name: 'minTokensOut', type: 'uint256' }],
     outputs: [],
   },
-  // sellTokens(uint256 amountIn, uint256 minEthOut)
   {
-    type: "function",
-    name: "sellTokens",
-    stateMutability: "nonpayable",
+    type: 'function',
+    name: 'sellTokens',
+    stateMutability: 'nonpayable',
     inputs: [
-      { name: "amountIn", type: "uint256" },
-      { name: "minEthOut", type: "uint256" },
+      { name: 'amountIn', type: 'uint256' },
+      { name: 'minEthOut', type: 'uint256' },
     ],
     outputs: [],
   },
-  // Admin setters that your deploy script calls (not used client-side but handy)
+  // For charts / balance indexing (standard ERC20 Transfer)
   {
-    type: "function",
-    name: "setTreasury",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "t", type: "address" }],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "setFeeBps",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "bps", type: "uint256" }],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "setPaused",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "p", type: "bool" }],
-    outputs: [],
+    type: 'event',
+    name: 'Transfer',
+    inputs: [
+      { indexed: true, name: 'from', type: 'address' },
+      { indexed: true, name: 'to', type: 'address' },
+      { indexed: false, name: 'value', type: 'uint256' },
+    ],
   },
 ] as const;
