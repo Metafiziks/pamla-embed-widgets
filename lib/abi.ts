@@ -66,3 +66,22 @@ export const BondingCurveABI = [
     ],
   },
 ] as const;
+
+// --- PointsManager (reads used in leaderboard) ---
+export const PointsManagerABI = [
+  {
+    type: 'function',
+    name: 'pointsOf',
+    stateMutability: 'view',
+    inputs: [{ name: 'who', type: 'address' }],
+    outputs: [{ name: 'points', type: 'uint256' }],
+  },
+  // Fallback older naming:
+  {
+    type: 'function',
+    name: 'points',
+    stateMutability: 'view',
+    inputs: [{ name: 'who', type: 'address' }],
+    outputs: [{ name: 'points', type: 'uint256' }],
+  },
+] as const;
