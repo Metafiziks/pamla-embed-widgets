@@ -8,7 +8,7 @@ import { parseEther } from 'viem'
 
 // NOTE: paths are relative to app/embed/
 import { abstractSepolia } from '../lib/wagmi'
-import { BondingCurveABI } from '../lib/abi'
+import { BondingCurveABI } from '../../lib/abi'
 import TradeChart from '../../components/TradeChart'
 
 export default function EmbedClient() {
