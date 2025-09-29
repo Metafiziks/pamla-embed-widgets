@@ -3,13 +3,13 @@ import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createWalletClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import type { Abi } from 'viem';
+import type { Abi } from 'viem'
 
-import RegistryABI from '@/lib/abi/SongTokenRegistry.json'
-import AccessControllerJson from '@/lib/abi/AccessController.json';
+// ✅ import the JSON artifact
+import AccessControllerJson from '@/lib/abi/AccessController.json'
 
-const AccessControllerABI = AccessControllerJson as Abi;
-import TokenABI from '@/lib/abi/BondingCurveToken.json';
+// ✅ grab just the .abi and cast
+const AccessControllerABI = AccessControllerJson.abi as Abi
 
 // Ensure Node runtime (Edge lacks some crypto/node APIs we need)
 export const runtime = 'nodejs'

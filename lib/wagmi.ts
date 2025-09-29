@@ -1,22 +1,32 @@
-// import { injected } from '@wagmi/connectors'
-import { injected } from 'wagmi/connectors'
-import type { Chain } from 'viem'
+// /lib/wagmi.ts
 import { createConfig, http } from 'wagmi';
-import { abstractSepolia } from '@/lib/chains/abstractSepolia';
+import { defineChain } from 'viem';
 
+// Read from your env (these are the ones you’ve been using)
 const RPC = process.env.NEXT_PUBLIC_ABSTRACT_RPC!;
-export const wagmiConfig = createConfig({
+const ID = Number(process.env.NEXT_PUBLIC_DEFAULT_CHAIN ?? 11124);
+
+export const abstractSepolia = defineChain({
+  id: ID,
+  name: 'Abstract Sepolia',
+  network: 'abstract-sepolia',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: {
+    default: { http: [RPC] },
+    public: { http: [RPC] },
+  },
+  blockExplorers: {
+    default: { name: 'AbstractScan', url: 'https://sepolia.abscan.org' },
+  },
+});
+
+// This is what providers.tsx expects
+export const config = createConfig({
   chains: [abstractSepolia],
   transports: {
     [abstractSepolia.id]: http(RPC),
   },
+  autoConnect: false, // prevents auto wallet popup
 });
 
-export const abstractSepolia: Chain = {
-  id: 11124,
-  name: 'Abstract Sepolia',
-  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: ['https://api.testnet.abs.xyz'] } },
-  blockExplorers: { default: { name: 'Abstract Scan', url: 'https://explorer.sepolia.abs.xyz' } },
-}
-
+export type AppChain = typeof abstractSepolia;
