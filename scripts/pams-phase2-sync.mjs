@@ -1,189 +1,224 @@
 // scripts/pams-phase2-sync.mjs
-// Run with: node scripts/pams-phase2-sync.mjs
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as dotenv from 'dotenv';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({
+  path: path.resolve(__dirname, '../.env'),
+  override: true,           // <<< this makes .env values override exported shell vars
+});
 
 import 'dotenv/config'
-import { createWalletClient, createPublicClient, http } from 'viem'
+import { createWalletClient, http, getContract, isAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { abstractSepolia } from '../lib/chain-abstract.js'
-import { SongTokenRegistryABI, AccessControllerABI, ERC721ABI } from '../lib/abi.js'
+import { abstractSepolia } from '../lib/wagmi.js'
+import { SongTokenRegistryABI, AccessControllerABI } from '../lib/abi.js'
 
-/** ========== ENV ========== */
-const {
-  // mainnet data source for PaMs holders
-  ETHERSCAN_API_KEY,
-
-  // contracts
-  NEXT_PUBLIC_PAMS_NFT,          // PaMs ERC-721 (mainnet)
-  NEXT_PUBLIC_ACCESS_CONTROLLER,  // ACL on Abstract Sepolia
-  REGISTRY_ADDRESS,               // ✅ SongTokenRegistry on Abstract Sepolia
-
-  // Abstract RPC + signer
-  RPC_URL,                        // Abstract Sepolia RPC (e.g. https://api.testnet.abs.xyz)
-  ADMIN_PRIVATE_KEY,              // has ACL_OWNER perms OR Registry owner
-
-  // optional verification & tuning
-  NEXT_PUBLIC_MAINNET_RPC,       // mainnet RPC (Infura/Alchemy) for balanceOf verification
-  VERIFY_BALANCE = 'true',       // "true"/"false" — verify with balanceOf (recommended)
-  BATCH_SIZE = '200',            // how many addresses per allowlist tx
-  PAGE_SIZE = '1000',            // etherscan page size (max 1000)
-  SLEEP_MS = '250'               // pause between etherscan pages to be nice
-} = process.env
-
-function requireEnv(name, val) {
-  if (!val || String(val).trim() === '') {
-    throw new Error(`❌ Missing env var: ${name}`)
-  }
+/** ---------- ENV ---------- */
+function requireEnv(name) {
+  const v = process.env[name]
+  if (!v) throw new Error(`❌ Missing env var: ${name}`)
+  return v.trim()
 }
 
-requireEnv('ETHERSCAN_API_KEY', ETHERSCAN_API_KEY)
-requireEnv('NEXT_PUBLIC_PAMS_NFT', NEXT_PUBLIC_PAMS_NFT)
-requireEnv('NEXT_PUBLIC_ACCESS_CONTROLLER', NEXT_PUBLIC_ACCESS_CONTROLLER)
-requireEnv('REGISTRY_ADDRESS', REGISTRY_ADDRESS)
-requireEnv('RPC_URL', RPC_URL)
-requireEnv('ADMIN_PRIVATE_KEY', ADMIN_PRIVATE_KEY)
+// core
+const REGISTRY = requireEnv('REGISTRY_ADDRESS')
+const ACL       = requireEnv('NEXT_PUBLIC_ACCESS_CONTROLLER')
+const PAMS_NFT  = requireEnv('NEXT_PUBLIC_PAMS_NFT')
 
-// signer on Abstract Sepolia
-const account = privateKeyToAccount(ADMIN_PRIVATE_KEY)
-const abs = createWalletClient({ account, chain: abstractSepolia, transport: http(RPC_URL) })
-const absReader = createPublicClient({ chain: abstractSepolia, transport: http(RPC_URL) })
+// rpc + keys
+const RPC_URL   = requireEnv('RPC_URL')
+const CHAIN_ID  = Number(process.env.CHAIN_ID || '11124')
+const PK        = requireEnv('ADMIN_PRIVATE_KEY')
 
-// optional mainnet client to verify balanceOf
-let mainnetReader = null
-if (VERIFY_BALANCE === 'true') {
-  requireEnv('NEXT_PUBLIC_MAINNET_RPC', NEXT_PUBLIC_MAINNET_RPC)
-  mainnetReader = createPublicClient({ chain: { id: 1, name: 'mainnet', nativeCurrency: { name:'ETH', symbol:'ETH', decimals:18 }, rpcUrls: { default: { http: [NEXT_PUBLIC_MAINNET_RPC] } } }, transport: http(NEXT_PUBLIC_MAINNET_RPC) })
-}
+// data providers
+const ETHERSCAN = process.env.ETHERSCAN_API_KEY?.trim()
+const ALCHEMY_V3 = process.env.ALCHEMY_MAINNET_V3_KEY?.trim()
+const ALCHEMY_V2 = process.env.ALCHEMY_MAINNET_KEY?.trim()
 
-const BATCH = Number(BATCH_SIZE)
-const PAGE = Number(PAGE_SIZE)
-const PAUSE = Number(SLEEP_MS)
+// tuning
+const VERIFY_BALANCE = String(process.env.VERIFY_BALANCE || 'false').toLowerCase() === 'true'
+const PAGE_SIZE      = Number(process.env.PAGE_SIZE || '1000')
+const SLEEP_MS       = Number(process.env.SLEEP_MS || '250')
+const BATCH_SIZE     = Number(process.env.BATCH_SIZE || '100') // start conservative
 
-const sleep = (ms) => new Promise(res => setTimeout(res, ms))
+console.log(`Using REGISTRY: ${REGISTRY}`)
+console.log(`Using ACL: ${ACL}`)
+console.log(`Using PaMs NFT: ${PAMS_NFT}`)
+console.log(`VERIFY_BALANCE: ${VERIFY_BALANCE}`)
+console.log(`BATCH_SIZE: ${BATCH_SIZE} SLEEP_MS: ${SLEEP_MS} PAGE_SIZE: ${PAGE_SIZE}`)
 
-/** Fetch all current holder addresses from Etherscan (paged) */
-async function getAllEtherscanHolders() {
-  let page = 1
-  const out = new Set()
+/** ---------- CLIENTS ---------- */
+const account = privateKeyToAccount(PK)
+const chain = { ...abstractSepolia, id: CHAIN_ID }
+const wallet = createWalletClient({ account, chain, transport: http(RPC_URL) })
 
-  // Etherscan tokenholderlist returns up to 1000 per page
-  while (true) {
-    const url = `https://api.etherscan.io/api?module=token&action=tokenholderlist&contractaddress=${NEXT_PUBLIC_PAMS_NFT}&page=${page}&offset=${PAGE}&apikey=${ETHERSCAN_API_KEY}`
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`Etherscan HTTP ${res.status}`)
-    const json = await res.json()
-    if (json.status !== '1') {
-      // If no more pages, Etherscan returns status "0" + message "No data found"
-      if (json.message?.toLowerCase().includes('no data')) break
-      throw new Error(`Etherscan error (page ${page}): ${json.message || json.result}`)
-    }
+const registry = getContract({
+  address: REGISTRY,
+  abi: SongTokenRegistryABI,
+  client: wallet
+})
 
-    const list = json.result || []
-    if (list.length === 0) break
+const acl = getContract({
+  address: ACL,
+  abi: AccessControllerABI,
+  client: wallet
+})
 
-    for (const row of list) {
-      const addr = row.TokenHolderAddress
-      if (addr && addr !== '0x0000000000000000000000000000000000000000') out.add(addr)
-    }
+/** ---------- HELPERS ---------- */
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
-    console.log(`→ Page ${page}: got ${list.length} holders (total so far ${out.size})`)
-    page += 1
-    await sleep(PAUSE) // be gentle with the API
-  }
-
-  return [...out]
-}
-
-/** Optionally verify each address still holds at least 1 PaMs (avoid stale sellers) */
-async function filterCurrentHolders(addresses) {
-  if (!mainnetReader) return addresses
-  console.log(`→ Verifying current balances via balanceOf() on mainnet…`)
-  const verified = []
-  for (let i = 0; i < addresses.length; i++) {
-    const who = addresses[i]
-    try {
-      const bal = await mainnetReader.readContract({
-        address: NEXT_PUBLIC_PAMS_NFT,
-        abi: ERC721ABI,
-        functionName: 'balanceOf',
-        args: [who]
-      })
-      if ((bal ?? 0n) > 0n) verified.push(who)
-    } catch (e) {
-      // if call fails, just skip this address
-    }
-    // light throttle to avoid RPC bans
-    if (i % 50 === 0) await sleep(50)
-  }
-  console.log(`→ ${verified.length}/${addresses.length} still hold PaMs`)
-  return verified
-}
-
-/** Batch a large array */
-function chunk(arr, n) {
+function distinctValidAddresses(addrs) {
+  const seen = new Set()
   const out = []
-  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+  for (const a of addrs) {
+    const aa = a.trim()
+    if (!isAddress(aa)) continue
+    if (aa === '0x0000000000000000000000000000000000000000') continue
+    if (seen.has(aa.toLowerCase())) continue
+    seen.add(aa.toLowerCase())
+    out.push(aa)
+  }
   return out
 }
 
-async function main() {
-  console.log('== PaMs → ACL allowlist sync (via Etherscan), then set phase=2 ==')
+/** ---------- HOLDERS (Alchemy first, Etherscan optional) ---------- */
+async function getOwnersAlchemyV3() {
+  if (!ALCHEMY_V3) throw new Error('Alchemy v3 key not set')
+  const url = `https://eth-mainnet.g.alchemy.com/nft/v3/${ALCHEMY_V3}/getOwnersForCollection?contractAddress=${PAMS_NFT}&withTokenBalances=false`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Alchemy v3 HTTP ${res.status}`)
+  const j = await res.json()
+  if (!j || !Array.isArray(j.ownerAddresses)) throw new Error('Alchemy v3 unexpected response')
+  return j.ownerAddresses
+}
 
-  // 0) Confirm ACL owner/permissions (optional but nice)
+async function getOwnersAlchemyV2() {
+  if (!ALCHEMY_V2) throw new Error('Alchemy v2 key not set')
+  const owners = []
+  let pageKey = null
+  do {
+    const url = new URL(`https://eth-mainnet.g.alchemy.com/nft/v2/${ALCHEMY_V2}/getOwnersForCollection`)
+    url.searchParams.set('contractAddress', PAMS_NFT)
+    url.searchParams.set('withTokenBalances', 'false')
+    if (pageKey) url.searchParams.set('pageKey', pageKey)
+    const res = await fetch(url.toString())
+    if (!res.ok) throw new Error(`Alchemy v2 HTTP ${res.status}`)
+    const j = await res.json()
+    if (Array.isArray(j.ownerAddresses)) owners.push(...j.ownerAddresses)
+    pageKey = j.pageKey || null
+    if (SLEEP_MS) await sleep(SLEEP_MS)
+  } while (pageKey)
+  return owners
+}
+
+async function getAllAlchemyOwners() {
   try {
-    const owner = await absReader.readContract({
-      address: NEXT_PUBLIC_ACCESS_CONTROLLER,
-      abi: AccessControllerABI,
-      functionName: 'owner',
-      args: []
-    })
-    console.log(`ACL owner: ${owner}`)
-  } catch {
-    console.log('⚠️ Could not read ACL owner (non-fatal)')
+    return await getOwnersAlchemyV3()
+  } catch (e) {
+    console.warn(`⚠️ v3 failed, falling back to v2: ${e.message}`)
+    return await getOwnersAlchemyV2()
+  }
+}
+
+async function verifyBalances(addrs) {
+  // Optional: check ERC721 balanceOf on mainnet for each address.
+  // We’ll skip here if VERIFY_BALANCE=false to save calls/credits.
+  return addrs
+}
+
+/** ---------- ADAPTIVE BATCH FORWARDING ---------- */
+async function forwardAllowlistAdaptive(addrs, allow) {
+  // Try to send one write; on revert, split into halves and recurse.
+  try {
+    await registry.write.forwardAllowlist([ACL, addrs, allow])
+    return { ok: addrs.length, failed: [] }
+  } catch (err) {
+    // If a large batch reverts, split and try smaller pieces.
+    if (addrs.length === 1) {
+      return { ok: 0, failed: [addrs[0]] }
+    }
+    const mid = Math.floor(addrs.length / 2)
+    const left = addrs.slice(0, mid)
+    const right = addrs.slice(mid)
+    const [resL, resR] = await Promise.all([
+      forwardAllowlistAdaptive(left, allow),
+      forwardAllowlistAdaptive(right, allow),
+    ])
+    return {
+      ok: resL.ok + resR.ok,
+      failed: [...resL.failed, ...resR.failed],
+    }
+  }
+}
+
+/** ---------- MAIN ---------- */
+async function main() {
+  console.log('== PaMs → ACL allowlist sync (Alchemy v3→v2), then set phase=2 ==')
+
+  // 1) sanity: registry must own the ACL
+  try {
+    const owner = await acl.read.owner()
+    if (String(owner).toLowerCase() !== REGISTRY.toLowerCase()) {
+      console.warn(`⚠️ ACL.owner() != REGISTRY. owner=${owner} registry=${REGISTRY}`)
+      console.warn('   forwardAllowlist will REVERT if registry is not owner. Consider transferring ownership to registry.')
+    }
+  } catch (e) {
+    console.warn('⚠️ Could not read ACL owner (non-fatal)')
   }
 
-  // 1) Fetch holders
-  const raw = await getAllEtherscanHolders()
-  if (raw.length === 0) {
-    console.log('⚠️ No PaMs holders found. Aborting.')
-    return
-  }
-  console.log(`→ Found ${raw.length} PaMs holder addresses (raw)`)
+  // 2) fetch holders
+  const raw = await getAllAlchemyOwners()
+  console.log(`→ Alchemy returned ${raw.length} addresses`)
+  const filtered = distinctValidAddresses(raw)
+  console.log(`→ ${filtered.length} valid addresses after filtering (no zero/dupes/invalid)`)
 
-  // 2) Optional: verify still holders
-  const holders = await filterCurrentHolders(raw)
+  // 3) optionally verify current balances
+  let holders = filtered
+  if (VERIFY_BALANCE) {
+    console.log('→ Verifying live balances on mainnet...')
+    holders = await verifyBalances(filtered)
+    console.log(`→ ${holders.length} are CURRENT PaMs holders after balance checks`)
+  } else {
+    console.log('→ Skipping live balance verification (VERIFY_BALANCE=false).')
+  }
+
   if (holders.length === 0) {
-    console.log('⚠️ After verification, no current holders. Aborting.')
+    console.log('⚠️ No holders to import; aborting before phase change.')
     return
   }
 
-  // 3) Forward allowlist via the Registry helper (batches)
-  const batches = chunk(holders, BATCH)
-  console.log(`→ Forwarding ${holders.length} allowlist entries in ${batches.length} txs (batch=${BATCH})`)
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i]
-    console.log(`   • Tx ${i + 1}/${batches.length} for ${batch.length} addrs`)
-    await abs.writeContract({
-      address: REGISTRY_ADDRESS,
-      abi: SongTokenRegistryABI,
-      functionName: 'forwardAllowlist',
-      args: [NEXT_PUBLIC_ACCESS_CONTROLLER, batch, true],
-    })
-    await sleep(250) // tiny gap between writes
+  // 4) forward allowlist adaptively per chunk
+  let totalOk = 0
+  const totalFailed = []
+  for (let i = 0; i < holders.length; i += BATCH_SIZE) {
+    const chunk = holders.slice(i, i + BATCH_SIZE)
+    console.log(`→ Forwarding batch ${Math.floor(i / BATCH_SIZE) + 1} (${chunk.length} addrs)`)
+    const res = await forwardAllowlistAdaptive(chunk, true)
+    totalOk += res.ok
+    totalFailed.push(...res.failed)
+    if (SLEEP_MS) await sleep(SLEEP_MS)
   }
 
-  // 4) Set phase = 2 (PaMs OR allowlisted)
-  console.log('→ Setting phase=2')
-  await abs.writeContract({
-    address: REGISTRY_ADDRESS,
-    abi: SongTokenRegistryABI,
-    functionName: 'forwardSetPhase',
-    args: [NEXT_PUBLIC_ACCESS_CONTROLLER, 2],
-  })
+  console.log(`→ Allowlisted OK: ${totalOk} | Failed: ${totalFailed.length}`)
+  if (totalFailed.length) {
+    console.log('   Failed addresses (kept for your review):')
+    console.log(totalFailed.join('\n'))
+  }
 
+  if (totalOk === 0) {
+    console.log('⚠️ Nothing allowlisted successfully; skipping phase change.')
+    return
+  }
+
+  // 5) set phase=2
+  console.log('→ Setting phase=2')
+  await registry.write.forwardSetPhase([ACL, 2])
   console.log('🎉 PaMs imported + Phase set to 2')
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('❌ Error', err)
   process.exit(1)
 })

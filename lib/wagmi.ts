@@ -2,6 +2,17 @@
 import { createConfig, http } from 'wagmi'
 import { injected } from 'wagmi/connectors'    // ✅ use wagmi/connectors
 import type { Chain } from 'viem'
+import { createConfig, http } from 'wagmi';
+// Use whichever chain file you kept:
+import { abstractSepolia } from '@/lib/chains/abstractSepolia';
+
+const RPC = process.env.NEXT_PUBLIC_ABSTRACT_RPC!;
+export const wagmiConfig = createConfig({
+  chains: [abstractSepolia],
+  transports: {
+    [abstractSepolia.id]: http(RPC),
+  },
+});
 
 export const abstractSepolia: Chain = {
   id: 11124,
@@ -11,10 +22,3 @@ export const abstractSepolia: Chain = {
   blockExplorers: { default: { name: 'Abstract Scan', url: 'https://explorer.sepolia.abs.xyz' } },
 }
 
-export const config = createConfig({
-  chains: [abstractSepolia],
-  connectors: [injected()],                     // ✅ fine now
-  transports: {
-    [abstractSepolia.id]: http(process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'),
-  },
-})
