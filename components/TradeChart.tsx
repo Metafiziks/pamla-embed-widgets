@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { createPublicClient, http, parseAbiItem } from 'viem'
-import { abstractSepolia } from '../lib/wagmi'
+import { abstractSepolia } from '@/lib/wagmi';
 
 type Pt = { x: number; y: number }
 

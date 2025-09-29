@@ -4,8 +4,10 @@ import { useSearchParams } from 'next/navigation'
 import { useAccount, useConnect } from 'wagmi'
 import { injected } from 'wagmi/connectors'
 import { parseEther, createPublicClient, createWalletClient, http, custom } from 'viem' // ✅ add custom
-import { abstractSepolia } from '../../lib/wagmi'
-import TokenABI from '@/lib/abi/BondingCurveToken.json'          // ✅ token/curve
+import { abstractSepolia } from '@/lib/wagmi';
+import type { Abi } from 'viem';
+import TokenJson from '@/lib/abi/BondingCurveToken.json'; // default JSON artifact
+const TokenABI = TokenJson.abi as Abi;                    // ✅ use the .abi array
 import AccessControllerABI from '@/lib/abi/AccessController.json' // ✅ ACL
 import { erc721Abi as ERC721ABI } from 'viem'
 import TradeChart from '../../components/TradeChart'
