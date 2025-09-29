@@ -1,5 +1,14 @@
 // lib/abi.ts
 
+import { createConfig, http } from 'wagmi';
+import { abstractSepolia } from '@/lib/chains/abstractSepolia';
+
+export const wagmiConfig = createConfig({
+  chains: [abstractSepolia],
+  transports: { [abstractSepolia.id]: http(process.env.NEXT_PUBLIC_ABSTRACT_RPC!) },
+  autoConnect: false,
+});
+
 // --- Minimal ERC-721 (balanceOf only) ---
 export const ERC721ABI = [
   {

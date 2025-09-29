@@ -3,9 +3,11 @@ import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAccount, useConnect } from 'wagmi'
 import { injected } from 'wagmi/connectors'
-import { parseEther, createPublicClient, createWalletClient, http } from 'viem'
+import { parseEther, createPublicClient, createWalletClient, http, custom } from 'viem' // ✅ add custom
 import { abstractSepolia } from '../../lib/wagmi'
-import { BondingCurveABI, ERC721ABI, AccessControllerABI } from '../../lib/abi'
+import TokenABI from '@/lib/abi/BondingCurveToken.json'          // ✅ token/curve
+import AccessControllerABI from '@/lib/abi/AccessController.json' // ✅ ACL
+import { erc721Abi as ERC721ABI } from 'viem'
 import TradeChart from '../../components/TradeChart'
 
 export const dynamic = 'force-dynamic'
@@ -58,9 +60,15 @@ function EmbedInner() {
     [mainnetRpc]
   )
   const wallet = useMemo(
-    () => (isConnected ? createWalletClient({ chain: abstractSepolia, transport: http((window as any).ethereum) }) : null),
-    [isConnected]
-  )
+  () =>
+    isConnected && typeof window !== 'undefined' && (window as any).ethereum
+      ? createWalletClient({
+          chain: abstractSepolia,
+          transport: custom((window as any).ethereum),   // ✅ use custom(provider), not http(...)
+        })
+      : null,
+  [isConnected]
+)
 
   useEffect(() => { document.body.style.background = 'transparent' }, [])
 
@@ -118,7 +126,7 @@ function EmbedInner() {
         account: address as `0x${string}`,
         chain: abstractSepolia,
         address: curve as `0x${string}`,
-        abi: BondingCurveABI,
+        abi: TokenABI,
         functionName: 'buyExactEth',
         args: [0n],
         value,
@@ -137,7 +145,7 @@ function EmbedInner() {
         account: address as `0x${string}`,
         chain: abstractSepolia,
         address: curve as `0x${string}`,
-        abi: BondingCurveABI,
+        abi: TokenABI,
         functionName: 'sellTokens',
         args: [amountIn, 0n],
       })

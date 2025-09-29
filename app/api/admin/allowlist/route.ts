@@ -4,9 +4,8 @@ import { NextResponse } from 'next/server'
 import { createWalletClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
-// ⚠️ Use relative imports to avoid path alias issues in build
-import { AccessControllerABI } from '../../../../lib/abi'
-
+import RegistryABI from '@/lib/abi/SongTokenRegistry.json'
+import AccessControllerABI from '@/lib/abi/AccessController.json'
 
 // Ensure Node runtime (Edge lacks some crypto/node APIs we need)
 export const runtime = 'nodejs'

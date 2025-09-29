@@ -1,15 +1,15 @@
 'use client'
 
 import { useSearchParams } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAccount, useConnect, useWalletClient } from 'wagmi'
 import { injected } from 'wagmi/connectors'
 import { parseEther } from 'viem'
 
-// NOTE: paths are relative to app/embed/
-import { abstractSepolia } from '../lib/wagmi'
-import { BondingCurveABI } from '../../lib/abi'
+import { abstractSepolia } from '../../lib/wagmi'          // ✅ fix path
+import TokenABI from '@/lib/abi/BondingCurveToken.json'    // ✅ default JSON import
 import TradeChart from '../../components/TradeChart'
+
 
 export default function EmbedClient() {
   const qs = useSearchParams()
@@ -55,7 +55,7 @@ export default function EmbedClient() {
         account: address as `0x${string}`,
         chain: abstractSepolia,
         address: curve as `0x${string}`,
-        abi: BondingCurveABI,
+        abi: TokenABI,
         functionName: 'buyExactEth',
         args: [0n], // slippage param is placeholder; adjust if you add quotes
         value,
@@ -79,7 +79,7 @@ export default function EmbedClient() {
         account: address as `0x${string}`,
         chain: abstractSepolia,
         address: curve as `0x${string}`,
-        abi: BondingCurveABI,
+        abi: TokenABI,
         functionName: 'sellTokens',
         args: [amountIn, 0n], // minEthOut = 0n placeholder; wire slippage as desired
       })
