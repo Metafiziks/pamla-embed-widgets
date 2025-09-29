@@ -1,9 +1,7 @@
 // import { injected } from '@wagmi/connectors'
-import { createConfig, http } from 'wagmi'
-import { injected } from 'wagmi/connectors'    // ✅ use wagmi/connectors
+import { injected } from 'wagmi/connectors'
 import type { Chain } from 'viem'
 import { createConfig, http } from 'wagmi';
-// Use whichever chain file you kept:
 import { abstractSepolia } from '@/lib/chains/abstractSepolia';
 
 const RPC = process.env.NEXT_PUBLIC_ABSTRACT_RPC!;
