@@ -1,13 +1,16 @@
-'use client'
+
+
+import type { Abi } from 'viem';
 
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useAccount, useConnect, useWalletClient } from 'wagmi'
 import { injected } from 'wagmi/connectors'
 import { parseEther } from 'viem'
+import TokenJson from '@/lib/abi/BondingCurveToken.json';
+const TokenABI = TokenJson.abi as Abi; // ✅ use the abi array, typed as Abi
 
-import { abstractSepolia } from '../../lib/wagmi'          // ✅ fix path
-import TokenABI from '@/lib/abi/BondingCurveToken.json'    // ✅ default JSON import
+import { abstractSepolia } from '../../lib/wagmi'
 import TradeChart from '../../components/TradeChart'
 
 
