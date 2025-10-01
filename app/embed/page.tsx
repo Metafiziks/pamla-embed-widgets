@@ -3,14 +3,15 @@ import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAccount, useConnect } from 'wagmi'
 import { injected } from 'wagmi/connectors'
-import { parseEther, createPublicClient, createWalletClient, http, custom } from 'viem'
+import { parseEther, createPublicClient, createWalletClient, http, custom, type Abi } from 'viem'
 import { abstractSepolia } from '@/lib/wagmi'
-import type { Abi } from 'viem'
 
 import TokenJson from '@/lib/abi/BondingCurveToken.json'
 const TokenABI = TokenJson.abi as Abi
 
-import AccessControllerABI from '@/lib/abi/AccessController.json' // used in reads as `any`
+import AccessControllerJson from '@/lib/abi/AccessController.json'
+const ACLABI = AccessControllerJson.abi as Abi
+
 import { erc721Abi as ERC721ABI } from 'viem'
 import TradeChart from '../../components/TradeChart'
 
@@ -50,7 +51,7 @@ function EmbedInner() {
   const [tokIn, setTokIn] = useState('10')
   const [busy, setBusy] = useState(false)
 
-  // NEW: badges/state
+  // Badges/state
   const [pamsCount, setPamsCount] = useState<bigint | null>(null)
   const [phase, setPhase] = useState<number | undefined>(undefined)
   const [allowlisted, setAllowlisted] = useState<boolean | null>(null)
@@ -80,44 +81,58 @@ function EmbedInner() {
 
   useEffect(() => { document.body.style.background = 'transparent' }, [])
 
-  // Fetch badges/phase/allowlist on connect or when address changes
+  // PHASE: fetch regardless of connection so the UI isn't "Unknown"
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      setBadgeErr(null)
-      setPamsCount(null)
-      setPhase(undefined)
+      try {
+        if (!acl) { setPhase(undefined); return }
+        // Try getPhase(), then phase()
+        let p: unknown
+        try {
+          p = await pub.readContract({ address: acl, abi: ACLABI, functionName: 'getPhase' })
+        } catch {
+          p = await pub.readContract({ address: acl, abi: ACLABI, functionName: 'phase' })
+        }
+        // viem may return bigint; normalize to number
+        const n = typeof p === 'bigint' ? Number(p) : (typeof p === 'number' ? p : undefined)
+        if (!cancelled) setPhase(n)
+      } catch (e: any) {
+        console.error('Phase read failed:', e)
+        if (!cancelled) setPhase(undefined)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [acl, pub])
+
+  // ALLOWLIST + PaMs: only when connected (needs address)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
       setAllowlisted(null)
+      setPamsCount(null)
+      setBadgeErr(null)
       if (!address) return
       try {
-        // Phase (ACL)
         if (acl) {
           try {
-            // try getPhase(), else phase()
-            let p = await pub.readContract({ address: acl, abi: AccessControllerABI as any, functionName: 'getPhase', args: [] }) as any
-            if (typeof p !== 'number') {
-              p = await pub.readContract({ address: acl, abi: AccessControllerABI as any, functionName: 'phase', args: [] }) as any
-            }
-            if (!cancelled) setPhase(Number(p))
-          } catch { /* ignore */ }
-        }
-        // Allowlist
-        if (acl && address) {
-          try {
-            const ok = await pub.readContract({ address: acl, abi: AccessControllerABI as any, functionName: 'isAllowlisted', args: [address] }) as boolean
+            const ok = await pub.readContract({ address: acl, abi: ACLABI, functionName: 'isAllowlisted', args: [address] }) as boolean
             if (!cancelled) setAllowlisted(ok)
-          } catch { /* ignore */ }
+          } catch (e:any) {
+            console.error('Allowlist read failed:', e?.message || e)
+          }
         }
-        // PaMs balance (mainnet)
-        if (pams && mainnet && address) {
+        if (pams && mainnet) {
           try {
-            const bal = await mainnet.readContract({ address: pams, abi: ERC721ABI as any, functionName: 'balanceOf', args: [address] }) as bigint
+            const bal = await mainnet.readContract({ address: pams, abi: ERC721ABI, functionName: 'balanceOf', args: [address] }) as bigint
             if (!cancelled) setPamsCount(bal)
           } catch (e:any) {
+            console.error('PaMs read failed:', e?.message || e)
             if (!cancelled) setBadgeErr('PaMs read failed')
           }
         }
       } catch (e:any) {
+        console.error('Badge fetch failed:', e?.message || e)
         if (!cancelled) setBadgeErr(e?.message || 'Badge fetch failed')
       }
     })()
@@ -127,15 +142,17 @@ function EmbedInner() {
   // --- Eligibility gating (Buy) ---
   const hasPams = (pamsCount ?? 0n) > 0n
   const canBuy =
-    phase === 3 ||                              // Public
-    (phase === 2 && (allowlisted === true || hasPams)) ||   // Whitelist + PaMs
-    (phase === 1 && hasPams)                    // PaMs-only
+    (phase === 3) ||                              // Public
+    (phase === 2 && (allowlisted === true || hasPams)) ||     // WL + PaMs (checking WL here)
+    (phase === 1 && hasPams)                      // PaMs-only
 
   let disabledReason = ''
-  if (phase === undefined) disabledReason = 'Checking eligibility…'
+  if (!isConnected) disabledReason = 'Connect wallet to continue'
+  else if (phase === undefined) disabledReason = 'Checking eligibility…'
   else if (phase === 0) disabledReason = 'Paused'
   else if (phase === 1 && !hasPams) disabledReason = 'PaMs holders only'
-  else if (phase === 2 && allowlisted === false) disabledReason = 'Not on the whitelist'
+  else if (phase === 2 && !(allowlisted === true || hasPams))
+  disabledReason = 'Not whitelisted (or you need a PaMs)'
 
   const doBuy = async () => {
     if (!isConnected) { connect({ connector: injectedConnector }); return }
@@ -170,6 +187,9 @@ function EmbedInner() {
   const doSell = async () => {
     if (!isConnected) { connect({ connector: injectedConnector }); return }
     if (!curve) return alert('Missing curve address')
+    // Optional: block selling only when paused to avoid scary gas
+    if (phase === 0) { alert('Selling is paused right now'); return }
+
     setBusy(true)
     try {
       const amountIn = parseEther(tokIn || '10')
@@ -214,28 +234,32 @@ function EmbedInner() {
         </div>
       )}
 
+      {/* Top status row: show phase even if not connected */}
+      <div className="card" style={{marginBottom:12}}>
+        <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12}}>
+          <span className="badge">{`Phase: ${phaseLabel(phase)}`}</span>
+
+          {isConnected && (
+            <>
+              <span style={{opacity:.8}}>Connected: {address?.slice(0,6)}…{address?.slice(-4)}</span>
+              {allowlisted !== null && (
+                <span className="badge" style={{background: allowlisted ? '#113a1a' : '#3a1111', borderColor: allowlisted ? '#1f8a36' : '#8a1f1f'}}>
+                  {allowlisted ? '✅ WHITELISTED' : '❌ NOT WHITELISTED'}
+                </span>
+              )}
+              {pamsCount !== null && (
+                <span className="badge">{`PaMs: ${pamsCount.toString()}`}</span>
+              )}
+              {badgeErr && <span className="badge" style={{background:'#3a1111', borderColor:'#8a1f1f'}}>⚠ {badgeErr}</span>}
+            </>
+          )}
+        </div>
+      </div>
+
       <div className="card">
         {!isConnected ? (
           <button onClick={() => connect({ connector: injectedConnector })}>Connect Wallet</button>
-        ) : (
-          <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12}}>
-            <div style={{opacity:.8}}>Connected: {address?.slice(0,6)}…{address?.slice(-4)}</div>
-
-            {/* Badges */}
-            {typeof phase !== 'undefined' && (
-              <span className="badge">{`Phase: ${phaseLabel(phase)}`}</span>
-            )}
-            {allowlisted !== null && (
-              <span className="badge" style={{background: allowlisted ? '#113a1a' : '#3a1111', borderColor: allowlisted ? '#1f8a36' : '#8a1f1f'}}>
-                {allowlisted ? '✅ WHITELISTED' : '❌ NOT WHITELISTED'}
-              </span>
-            )}
-            {pamsCount !== null && (
-              <span className="badge">{`PaMs: ${pamsCount.toString()}`}</span>
-            )}
-            {badgeErr && <span className="badge" style={{background:'#3a1111', borderColor:'#8a1f1f'}}>⚠ {badgeErr}</span>}
-          </div>
-        )}
+        ) : null}
 
         <div style={{display:'flex', gap:12, marginTop:12}}>
           <div style={{flex:1}}>
@@ -259,7 +283,9 @@ function EmbedInner() {
           <div style={{flex:1}}>
             <label>Sell tokens</label>
             <input value={tokIn} onChange={e=>setTokIn(e.target.value)} />
-            <button onClick={doSell} disabled={busy} style={{marginTop:8}}>Sell</button>
+            <button onClick={doSell} disabled={busy || phase === 0} style={{marginTop:8}}>
+              {busy ? 'Processing…' : 'Sell'}
+            </button>
           </div>
         </div>
       </div>
