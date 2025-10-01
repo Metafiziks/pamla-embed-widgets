@@ -1,0 +1,43 @@
+'use client'
+
+import { useMemo } from 'react'
+import { useReadContract } from 'wagmi'
+import type { Abi } from 'viem'
+import { ACLABI } from '@/lib/abi' // from lib/abi/index.ts barrel
+import { ADDRESSES } from '@/lib/addresses'
+
+/** Try `phase()` first; fall back to `getPhase()` if the contract exposes that instead. */
+export function useMintPhase() {
+  // Primary: phase()
+  const p1 = useReadContract({
+    address: ADDRESSES.ACL as `0x${string}`,
+    abi: ACLABI as Abi,
+    functionName: 'phase',
+    query: { retry: 0 },
+  })
+
+  // Fallback: getPhase()
+  const p2 = useReadContract({
+    address: ADDRESSES.ACL as `0x${string}`,
+    abi: ACLABI as Abi,
+    functionName: 'getPhase',
+    query: { enabled: !!p1.error }, // only run if phase() errored
+  })
+
+  const value = (p1.data ?? p2.data) as (0|1|2|3|undefined)
+
+  const label = useMemo(() => {
+    switch (value) {
+      case 1: return 'PaMs only'
+      case 2: return 'Whitelist + PaMs'
+      case 3: return 'Public'
+      case 0: return 'Paused'
+      default: return 'Unknown'
+    }
+  }, [value])
+
+  const isLoading = p1.isLoading || p2.isLoading
+  const error = p1.error && p2.error ? (p1.error || p2.error) : undefined
+
+  return { value, label, isLoading, error }
+}

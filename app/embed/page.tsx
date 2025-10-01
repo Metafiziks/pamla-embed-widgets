@@ -3,12 +3,14 @@ import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAccount, useConnect } from 'wagmi'
 import { injected } from 'wagmi/connectors'
-import { parseEther, createPublicClient, createWalletClient, http, custom } from 'viem' // ✅ add custom
-import { abstractSepolia } from '@/lib/wagmi';
-import type { Abi } from 'viem';
-import TokenJson from '@/lib/abi/BondingCurveToken.json'; // default JSON artifact
-const TokenABI = TokenJson.abi as Abi;                    // ✅ use the .abi array
-import AccessControllerABI from '@/lib/abi/AccessController.json' // ✅ ACL
+import { parseEther, createPublicClient, createWalletClient, http, custom } from 'viem'
+import { abstractSepolia } from '@/lib/wagmi'
+import type { Abi } from 'viem'
+
+import TokenJson from '@/lib/abi/BondingCurveToken.json'
+const TokenABI = TokenJson.abi as Abi
+
+import AccessControllerABI from '@/lib/abi/AccessController.json' // used in reads as `any`
 import { erc721Abi as ERC721ABI } from 'viem'
 import TradeChart from '../../components/TradeChart'
 
@@ -19,7 +21,8 @@ function phaseLabel(p?: number) {
   switch (p) {
     case 0: return 'Paused'
     case 1: return 'PaMs Only'
-    case 2: return 'Public'
+    case 2: return 'Whitelist + PaMs'
+    case 3: return 'Public'
     default: return typeof p === 'number' ? `Phase ${p}` : 'Unknown'
   }
 }
@@ -47,7 +50,7 @@ function EmbedInner() {
   const [tokIn, setTokIn] = useState('10')
   const [busy, setBusy] = useState(false)
 
-  // NEW: badges state
+  // NEW: badges/state
   const [pamsCount, setPamsCount] = useState<bigint | null>(null)
   const [phase, setPhase] = useState<number | undefined>(undefined)
   const [allowlisted, setAllowlisted] = useState<boolean | null>(null)
@@ -58,23 +61,26 @@ function EmbedInner() {
     [absRpc]
   )
   const mainnet = useMemo(
-    () => (mainnetRpc ? createPublicClient({ chain: { id: 1, name:'mainnet', nativeCurrency:{name:'ETH',symbol:'ETH',decimals:18}, rpcUrls:{default:{http:[mainnetRpc]}} } as any, transport: http(mainnetRpc) }) : null),
+    () => (mainnetRpc ? createPublicClient({
+      chain: { id: 1, name:'mainnet', nativeCurrency:{name:'ETH',symbol:'ETH',decimals:18}, rpcUrls:{default:{http:[mainnetRpc]}} } as any,
+      transport: http(mainnetRpc)
+    }) : null),
     [mainnetRpc]
   )
   const wallet = useMemo(
-  () =>
-    isConnected && typeof window !== 'undefined' && (window as any).ethereum
-      ? createWalletClient({
-          chain: abstractSepolia,
-          transport: custom((window as any).ethereum),   // ✅ use custom(provider), not http(...)
-        })
-      : null,
-  [isConnected]
-)
+    () =>
+      isConnected && typeof window !== 'undefined' && (window as any).ethereum
+        ? createWalletClient({
+            chain: abstractSepolia,
+            transport: custom((window as any).ethereum),   // browser wallet provider
+          })
+        : null,
+    [isConnected]
+  )
 
   useEffect(() => { document.body.style.background = 'transparent' }, [])
 
-  // NEW: fetch badges on connect or when address changes
+  // Fetch badges/phase/allowlist on connect or when address changes
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -118,9 +124,29 @@ function EmbedInner() {
     return () => { cancelled = true }
   }, [address, acl, pams, pub, mainnet])
 
+  // --- Eligibility gating (Buy) ---
+  const hasPams = (pamsCount ?? 0n) > 0n
+  const canBuy =
+    phase === 3 ||                              // Public
+    (phase === 2 && (allowlisted === true || hasPams)) ||   // Whitelist + PaMs
+    (phase === 1 && hasPams)                    // PaMs-only
+
+  let disabledReason = ''
+  if (phase === undefined) disabledReason = 'Checking eligibility…'
+  else if (phase === 0) disabledReason = 'Paused'
+  else if (phase === 1 && !hasPams) disabledReason = 'PaMs holders only'
+  else if (phase === 2 && allowlisted === false) disabledReason = 'Not on the whitelist'
+
   const doBuy = async () => {
     if (!isConnected) { connect({ connector: injectedConnector }); return }
     if (!curve) return alert('Missing curve address')
+
+    // Preflight guard (double-check)
+    if (!canBuy) {
+      alert(disabledReason || 'Not eligible to buy right now')
+      return
+    }
+
     setBusy(true)
     try {
       const value = parseEther(ethIn || '0.01')
@@ -134,7 +160,11 @@ function EmbedInner() {
         value,
       })
       alert('Buy sent')
-    } catch (e:any) { alert(e?.shortMessage || e?.message || 'Buy failed') } finally { setBusy(false) }
+    } catch (e:any) {
+      alert(e?.shortMessage || e?.message || 'Buy failed')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const doSell = async () => {
@@ -152,7 +182,11 @@ function EmbedInner() {
         args: [amountIn, 0n],
       })
       alert('Sell sent')
-    } catch (e:any) { alert(e?.shortMessage || e?.message || 'Sell failed') } finally { setBusy(false) }
+    } catch (e:any) {
+      alert(e?.shortMessage || e?.message || 'Sell failed')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
@@ -160,7 +194,13 @@ function EmbedInner() {
   src="${origin}/embed?curve=${curve || ''}&chain=${chain}"
   width="100%" height="950" style="border:0;background:transparent" loading="lazy"></iframe>`
 
-  if (!curve) return <div style={{color:'#fff'}}>Missing curve address. Pass <code>?curve=0x...</code> or set <code>NEXT_PUBLIC_DEFAULT_CURVE</code>.</div>
+  if (!curve) {
+    return (
+      <div style={{color:'#fff'}}>
+        Missing curve address. Pass <code>?curve=0x...</code> or set <code>NEXT_PUBLIC_DEFAULT_CURVE</code>.
+      </div>
+    )
+  }
 
   return (
     <div style={{fontFamily:'ui-sans-serif,system-ui,Arial', color:'#f2f2f2'}}>
@@ -181,7 +221,7 @@ function EmbedInner() {
           <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12}}>
             <div style={{opacity:.8}}>Connected: {address?.slice(0,6)}…{address?.slice(-4)}</div>
 
-            {/* NEW: badges */}
+            {/* Badges */}
             {typeof phase !== 'undefined' && (
               <span className="badge">{`Phase: ${phaseLabel(phase)}`}</span>
             )}
@@ -201,8 +241,21 @@ function EmbedInner() {
           <div style={{flex:1}}>
             <label>Buy with ETH</label>
             <input value={ethIn} onChange={e=>setEthIn(e.target.value)} />
-            <button onClick={doBuy} disabled={busy} style={{marginTop:8}}>Buy</button>
+            <button
+              onClick={async () => { if (!canBuy) return; await doBuy() }}
+              disabled={busy || !canBuy}
+              style={{marginTop:8}}
+              title={!canBuy && disabledReason ? disabledReason : undefined}
+            >
+              {busy ? 'Processing…' : 'Buy'}
+            </button>
+            {!canBuy && disabledReason && (
+              <div style={{marginTop:6, fontSize:12, color:'#ff9f9f'}}>
+                {disabledReason}
+              </div>
+            )}
           </div>
+
           <div style={{flex:1}}>
             <label>Sell tokens</label>
             <input value={tokIn} onChange={e=>setTokIn(e.target.value)} />
