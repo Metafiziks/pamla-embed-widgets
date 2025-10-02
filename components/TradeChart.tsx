@@ -247,6 +247,7 @@ export default function TradeChart({
         <div>
           {INTERVALS.map(i => (
             <button
+              type="button"
               key={i.key}
               onClick={() => setInterval(i.key)}
               style={{
@@ -262,6 +263,7 @@ export default function TradeChart({
         <div>
           {RANGES.map(r => (
             <button
+              type="button"
               key={r.key}
               onClick={() => setRange(r.key)}
               style={{
@@ -313,11 +315,20 @@ export default function TradeChart({
               tickFormatter={(v) => new Date(Number(v)).toLocaleTimeString()}
             />
             <YAxis
-              tick={{ fontSize: 12 }}
-              axisLine={{ opacity: 0.3 }}
-              tickLine={{ opacity: 0.3 }}
-              domain={['auto','auto']}
-            />
+  yAxisId="price"
+  tick={{ fontSize: 12 }}
+  axisLine={{ opacity: 0.3 }}
+  tickLine={{ opacity: 0.3 }}
+  domain={([min, max]) => {
+    if (min === max) {
+      const pad = min * 0.01 || 0.000001
+      return [min - pad, max + pad]
+    }
+    const pad = (max - min) * 0.05
+    return [min - pad, max + pad]
+  }}
+/>
+
             <Tooltip
               formatter={(_: any, __: any, p: any) => {
                 const c = p?.payload as Candle
@@ -330,48 +341,53 @@ export default function TradeChart({
             />
             {/* candle via custom Bar shape */}
             <Bar
+  yAxisId="price"
   dataKey="close"
   fill="transparent"
   shape={(props: any) => {
     const { x, width, payload } = props
-    const c: Candle = payload
+const c: Candle = payload
 
-    // Recharts sometimes calls the shape before scales exist.
-    // Try a few places where the y scale may live; bail if missing.
-    const yScale =
-      props?.yAxis?.scale ||
-      props?.yAxis?.axis?.scale ||
-      props?.yAxis?.yAxisScale ||
-      null
-    if (!yScale) return null
+// Prefer a few places where Recharts puts the scale:
+const yScale =
+  props?.yAxis?.scale ||
+  props?.yAxis?.axis?.scale ||
+  props?.yAxis?.yAxisScale ||
+  null
+if (!yScale) return null
 
-    // Map values to pixel Y safely
-    const yOpen = yScale(c.open)
-    const yClose = yScale(c.close)
-    const yHigh = yScale(c.high)
-    const yLow = yScale(c.low)
+const yOpen  = yScale(c.open)
+const yClose = yScale(c.close)
+const yHigh  = yScale(c.high)
+const yLow   = yScale(c.low)
 
-    // If any are invalid, skip drawing this candle
-    const vals = [yOpen, yClose, yHigh, yLow]
-    if (vals.some((v) => typeof v !== 'number' || !isFinite(v))) return null
+const vals = [yOpen, yClose, yHigh, yLow]
+if (vals.some(v => typeof v !== 'number' || !isFinite(v))) return null
 
-    const candleW = Math.max(3, Math.min(12, width * 0.6)) // cap width to prevent fat bars
-    const cx = x + width / 2 - candleW / 2
-    const color = c.close >= c.open ? '#3ddc97' : '#ff7a7a'
+const candleW = Math.max(3, Math.min(12, width * 0.6))
+const cx = x + width / 2 - candleW / 2
+const color = c.close >= c.open ? '#3ddc97' : '#ff7a7a'
 
-    const wickY = Math.min(yHigh, yLow)
-    const wickH = Math.abs(yLow - yHigh) || 2
-    const bodyY = Math.min(yOpen, yClose)
-    const bodyH = Math.abs(yClose - yOpen) || 2
+// wick
+const wickY = Math.min(yHigh, yLow)
+const wickH = Math.abs(yLow - yHigh) || 2
 
-    return (
-      <g>
-        {/* wick */}
-        <Rectangle x={x + width / 2 - 1} y={wickY} width={2} height={wickH} fill={color} />
-        {/* body */}
-        <Rectangle x={cx} y={bodyY} width={candleW} height={bodyH} fill={color} />
-      </g>
-    )
+// body (ensure ≥2 px so it’s visible even when open===close)
+const bodyY = Math.min(yOpen, yClose)
+const rawH  = Math.abs(yClose - yOpen)
+const bodyH = rawH < 2 ? 2 : rawH
+
+return (
+  <g>
+    {/* wick */}
+    <Rectangle x={x + width / 2 - 1} y={wickY} width={2} height={wickH} fill={color} />
+    {/* body */}
+    <Rectangle x={cx} y={bodyY} width={candleW} height={bodyH} fill={color} />
+    {/* baseline for ultra-flat candles (nice visual hint) */}
+    <Rectangle x={cx} y={bodyY + Math.max(0, bodyH - 1)} width={candleW} height={1} fill={color} />
+  </g>
+)
+
   }}
 />
 

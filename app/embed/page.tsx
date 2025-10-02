@@ -197,53 +197,64 @@ function EmbedInner() {
 }
 
 const doSell = async () => {
-  if (!isConnected) { connect({ connector: injectedConnector }); return }
-  if (!curve) return alert('Missing curve address')
-  if (!token) return alert('Missing token address (NEXT_PUBLIC_TOKEN)')
-  if (phase === 0) { alert('Selling is paused right now'); return }
-
-  setBusy(true)
   try {
+    if (!isConnected) { connect({ connector: injectedConnector }); return }
+    if (!curve) return alert('Missing curve address')
+    if (phase === 0) { alert('Selling is paused right now'); return }
+
+    // Make sure you set this earlier in the file:
+    // const token = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}`
+    if (!token) return alert('Missing token address (NEXT_PUBLIC_TOKEN)')
+
+    setBusy(true)
     const amountIn = parseEther(tokIn || '10')
 
-    // 1) Check allowance
+    console.log('[sell] reading allowance', { token, owner: address, spender: curve })
     const allowance = await pub.readContract({
       address: token,
       abi: ERC20ABI,
       functionName: 'allowance',
       args: [address as `0x${string}`, curve as `0x${string}`],
     }) as bigint
+    console.log('[sell] allowance =', allowance.toString())
 
-    // 2) Approve if needed
     if (allowance < amountIn) {
+      console.log('[sell] approving amountIn', amountIn.toString())
       const approveHash = await wallet!.writeContract({
         account: address as `0x${string}`,
         chain: abstractSepolia,
         address: token,
         abi: ERC20ABI,
         functionName: 'approve',
-        args: [curve as `0x${string}`, amountIn],
+        args: [curve as `0x${string}`, amountIn], // or MaxUint256 for single approve
       })
+      console.log('[sell] approve tx =', approveHash)
       const approveRcpt = await pub.waitForTransactionReceipt({ hash: approveHash })
+      console.log('[sell] approve status =', approveRcpt.status)
       if (approveRcpt.status !== 'success') throw new Error('Approve failed')
     }
 
-    // 3) Sell
-    const hash = await wallet!.writeContract({
+    // Now sell. If your curve uses a different method, adjust here:
+    console.log('[sell] sending sellTokens', { amountIn: amountIn.toString() })
+    const sellHash = await wallet!.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
-      functionName: 'sellTokens',
-      args: [amountIn, 0n], // minEthOut=0 for now
+      functionName: 'sellTokens', // <— if your ABI uses sellExactTokens, change it
+      args: [amountIn, 0n],       // [amountIn, minEthOut]
     })
-    const rcpt = await pub.waitForTransactionReceipt({ hash })
-    if (rcpt.status === 'success') {
-      alert(`Sell confirmed: ${hash}`)
+    console.log('[sell] sell tx =', sellHash)
+    const sellRcpt = await pub.waitForTransactionReceipt({ hash: sellHash })
+    console.log('[sell] sell status =', sellRcpt.status)
+
+    if (sellRcpt.status === 'success') {
+      alert(`Sell confirmed: ${sellHash}`)
     } else {
-      alert(`Transaction mined but not successful: ${hash}`)
+      alert(`Transaction mined but not successful: ${sellHash}`)
     }
-  } catch (e:any) {
+  } catch (e: any) {
+    console.error('[sell] error', e)
     alert(e?.shortMessage || e?.message || 'Sell failed')
   } finally {
     setBusy(false)
