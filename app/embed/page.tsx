@@ -155,59 +155,80 @@ function EmbedInner() {
   disabledReason = 'Not whitelisted (or you need a PaMs)'
 
   const doBuy = async () => {
-    if (!isConnected) { connect({ connector: injectedConnector }); return }
-    if (!curve) return alert('Missing curve address')
+  if (!isConnected) { connect({ connector: injectedConnector }); return }
+  if (!curve) return alert('Missing curve address')
 
-    // Preflight guard (double-check)
-    if (!canBuy) {
-      alert(disabledReason || 'Not eligible to buy right now')
-      return
-    }
-
-    setBusy(true)
-    try {
-      const value = parseEther(ethIn || '0.01')
-      await wallet!.writeContract({
-        account: address as `0x${string}`,
-        chain: abstractSepolia,
-        address: curve as `0x${string}`,
-        abi: TokenABI,
-        functionName: 'buyExactEth',
-        args: [0n],
-        value,
-      })
-      alert('Buy sent')
-    } catch (e:any) {
-      alert(e?.shortMessage || e?.message || 'Buy failed')
-    } finally {
-      setBusy(false)
-    }
+  // Preflight guard (double-check)
+  if (!canBuy) {
+    alert(disabledReason || 'Not eligible to buy right now')
+    return
   }
 
-  const doSell = async () => {
-    if (!isConnected) { connect({ connector: injectedConnector }); return }
-    if (!curve) return alert('Missing curve address')
-    // Optional: block selling only when paused to avoid scary gas
-    if (phase === 0) { alert('Selling is paused right now'); return }
+  setBusy(true)
+  try {
+    const value = parseEther(ethIn || '0.01')
 
-    setBusy(true)
-    try {
-      const amountIn = parseEther(tokIn || '10')
-      await wallet!.writeContract({
-        account: address as `0x${string}`,
-        chain: abstractSepolia,
-        address: curve as `0x${string}`,
-        abi: TokenABI,
-        functionName: 'sellTokens',
-        args: [amountIn, 0n],
-      })
-      alert('Sell sent')
-    } catch (e:any) {
-      alert(e?.shortMessage || e?.message || 'Sell failed')
-    } finally {
-      setBusy(false)
+    // 1) Send tx and capture the hash
+    const hash = await wallet!.writeContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'buyExactEth',
+      args: [0n],
+      value,
+    })
+
+    // 2) Wait for confirmation using your public client
+    const receipt = await pub.waitForTransactionReceipt({ hash })
+
+    // 3) Optional: simple success check & message
+    if (receipt.status === 'success') {
+      alert(`Buy confirmed: ${hash}`)
+    } else {
+      alert(`Transaction mined but not successful: ${hash}`)
     }
+  } catch (e: any) {
+    alert(e?.shortMessage || e?.message || 'Buy failed')
+  } finally {
+    setBusy(false)
   }
+}
+
+const doSell = async () => {
+  if (!isConnected) { connect({ connector: injectedConnector }); return }
+  if (!curve) return alert('Missing curve address')
+  // Optional safety: don’t allow sell when paused
+  if (phase === 0) { alert('Selling is paused right now'); return }
+
+  setBusy(true)
+  try {
+    const amountIn = parseEther(tokIn || '10')
+
+    // 1) Send tx and capture hash
+    const hash = await wallet!.writeContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'sellTokens',        // keep your curve’s exact name
+      args: [amountIn, 0n],              // [minEthOut] set to 0n for now
+    })
+
+    // 2) Wait for confirmation
+    const receipt = await pub.waitForTransactionReceipt({ hash })
+
+    if (receipt.status === 'success') {
+      alert(`Sell confirmed: ${hash}`)
+    } else {
+      alert(`Transaction mined but not successful: ${hash}`)
+    }
+  } catch (e:any) {
+    alert(e?.shortMessage || e?.message || 'Sell failed')
+  } finally {
+    setBusy(false)
+  }
+}
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
   const iframeCode = `<iframe
