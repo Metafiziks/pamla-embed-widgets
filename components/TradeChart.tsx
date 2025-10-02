@@ -9,53 +9,61 @@ import {
 } from 'viem'
 import { abstractSepolia } from '@/lib/wagmi'
 import TokenJson from '@/lib/abi/BondingCurveToken.json'
+// If your trade events are on the *curve* (not the token), keep using this ABI.
+// If they’re on a separate Curve ABI file, swap it in here.
 const TokenABI = TokenJson.abi as Abi
 
-type Pt = { x: number; y: number }
-type Row = { blk: number; name?: string; y: number; keys: string[] }
+// Recharts
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts'
 
-const MAX_POINTS = 200
-const POLL_MS = 6000
+type TPoint = { t: number; price: number }   // t = blockNumber (or timestamp), price in ETH/token
+type TFeed  = { blk: number; name: string; price: number; args: string[] }
 
-// Any event name here will be treated as a trade
-const TRADE_LIKE = new Set([
-  'Trade', 'Buy', 'Bought', 'TokensPurchased',
-  'Sell', 'Sold', 'TokensSold',
-])
+const MAX_POINTS = 400            // keep a decent window
+const POLL_MS = 6000              // 6s
+const TRADE_NAMES = new Set(['Buy','Bought','Sell','Sold','TokensPurchased','TokensSold','Trade'])
 
-function toFloat(bi?: bigint, decimals = 18) {
-  if (typeof bi !== 'bigint') return undefined
-  // convert to Number with decimal shift (ok for display)
-  return Number(bi) / 10 ** decimals
+// Convert bigint 18 decimals => JS number
+function f18(x?: bigint) {
+  if (typeof x !== 'bigint') return undefined
+  // Note: Number(bigint)/1e18 is okay for charting (display), not for accounting.
+  return Number(x) / 1e18
 }
 
-// Try to compute a price from various arg shapes.
-// Prefers an explicit price, else ratio of quote/base.
-function computePrice(args: Record<string, any>) {
-  // direct price fields
-  const price =
-    toFloat(args.priceAfter) ??
-    toFloat(args.price) ??
-    (typeof args.quotePerBase === 'bigint' ? toFloat(args.quotePerBase) : undefined)
-  if (typeof price === 'number') return price
+// Compute price from typical arg names; for your case, ethIn / tokensOut.
+function computePrice(args: Record<string, any>): number {
+  // preferred direct price fields if present
+  const direct =
+      f18(args.priceAfter) ??
+      f18(args.price) ??
+      (typeof args.quotePerBase === 'bigint' ? f18(args.quotePerBase) : undefined)
+  if (typeof direct === 'number') return direct
 
-  // common amount pairs (try eth as quote, token as base)
-  const ethIn = args.ethIn ?? args.eth ?? args.ethAmount ?? args.value
-  const ethOut = args.ethOut
-  const tokenIn = args.tokenIn ?? args.tokensIn ?? args.amountIn ?? args.tokenAmount
-  const tokenOut = args.tokenOut ?? args.tokensOut ?? args.amountOut
+  // common pairs
+  const ethIn     = args.ethIn     ?? args.ethAmount ?? args.eth ?? args.value
+  const ethOut    = args.ethOut
+  const tokensIn  = args.tokensIn  ?? args.tokenIn  ?? args.amountIn  ?? args.tokenAmount
+  const tokensOut = args.tokensOut ?? args.tokenOut ?? args.amountOut
 
-  // Prefer ratio of quote/base in direction of a buy: ethIn / tokensOut
+  // Your debug shows: buyer, ethIn, tokensOut
   const candidates: Array<[any, any]> = [
-    [ethIn, tokenOut],
-    [ethOut, tokenIn],
-    [ethIn, tokenIn],
-    [ethOut, tokenOut],
+    [ethIn, tokensOut], // ✅ your main case
+    [ethOut, tokensIn],
+    [ethIn, tokensIn],
+    [ethOut, tokensOut],
   ]
 
   for (const [q, b] of candidates) {
     if (typeof q === 'bigint' && typeof b === 'bigint' && b !== 0n) {
-      const qf = toFloat(q)!, bf = toFloat(b)!
+      const qf = f18(q)!, bf = f18(b)!
       if (bf > 0) return qf / bf
     }
   }
@@ -71,8 +79,8 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
     []
   )
 
-  const [points, setPoints] = useState<Pt[]>([])
-  const [rows, setRows] = useState<Row[]>([])   // debug rows
+  const [data, setData] = useState<TPoint[]>([])
+  const [feed, setFeed] = useState<TFeed[]>([])
   const [err, setErr] = useState<string | null>(null)
 
   const lastBlockRef = useRef<bigint | null>(null)
@@ -82,7 +90,7 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
     let cancelled = false
 
     async function backfill() {
-      setErr(null); setPoints([]); setRows([]); lastBlockRef.current = null
+      setErr(null); setData([]); setFeed([]); lastBlockRef.current = null
       try {
         const latest = await client.getBlockNumber()
         const span = 50_000n
@@ -91,23 +99,24 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
         const logs = await client.getLogs({ address, fromBlock, toBlock: latest })
         const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
 
-        const pts: Pt[] = []
-        const table: Row[] = []
+        const pts: TPoint[] = []
+        const rows: TFeed[] = []
 
         for (const l of parsed) {
-          if (!TRADE_LIKE.has(l.eventName || '')) continue
+          const name = l.eventName || ''
+          if (!TRADE_NAMES.has(name)) continue
           const args: any = l.args || {}
-          const y = computePrice(args)
+          const price = computePrice(args)
           const blk = Number(l.blockNumber ?? 0n)
-          pts.push({ x: blk, y })
-          table.push({ blk, name: l.eventName, y, keys: Object.keys(args || {}) })
+          pts.push({ t: blk, price })
+          rows.push({ blk, name, price, args: Object.keys(args) })
         }
 
         if (!cancelled) {
-          pts.sort((a, b) => a.x - b.x)
-          table.sort((a, b) => a.blk - b.blk)
-          setPoints(pts.slice(-MAX_POINTS))
-          setRows(table.slice(-5))  // keep last 5 for display
+          pts.sort((a, b) => a.t - b.t)
+          rows.sort((a, b) => a.blk - b.blk)
+          setData(pts.slice(-MAX_POINTS))
+          setFeed(rows.slice(-8)) // last 8 rows
           lastBlockRef.current = latest
         }
       } catch (e: any) {
@@ -127,33 +136,34 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
         if (fromBlock <= latest) {
           const logs = await client.getLogs({ address, fromBlock, toBlock: latest })
           const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
-          const incomingPts: Pt[] = []
-          const incomingRows: Row[] = []
+
+          const incomingPts: TPoint[] = []
+          const incomingRows: TFeed[] = []
 
           for (const l of parsed) {
-            if (!TRADE_LIKE.has(l.eventName || '')) continue
+            const name = l.eventName || ''
+            if (!TRADE_NAMES.has(name)) continue
             const args: any = l.args || {}
-            const y = computePrice(args)
+            const price = computePrice(args)
             const blk = Number(l.blockNumber ?? 0n)
-            incomingPts.push({ x: blk, y })
-            incomingRows.push({ blk, name: l.eventName, y, keys: Object.keys(args || {}) })
+            incomingPts.push({ t: blk, price })
+            incomingRows.push({ blk, name, price, args: Object.keys(args) })
           }
 
           if (incomingPts.length) {
-            setPoints(prev => {
-              const merged = [...prev, ...incomingPts].sort((a, b) => a.x - b.x)
-              // de-dup by block (keep last in block)
-              const dedup: Pt[] = []
+            setData(prev => {
+              const merged = [...prev, ...incomingPts].sort((a, b) => a.t - b.t)
+              // de-dup per block number
+              const dedup: TPoint[] = []
               for (const p of merged) {
-                if (!dedup.length || dedup[dedup.length - 1].x !== p.x) dedup.push(p)
+                if (!dedup.length || dedup[dedup.length - 1].t !== p.t) dedup.push(p)
                 else dedup[dedup.length - 1] = p
               }
               return dedup.slice(-MAX_POINTS)
             })
-
-            setRows(prev => {
+            setFeed(prev => {
               const merged = [...prev, ...incomingRows].sort((a, b) => a.blk - b.blk)
-              return merged.slice(-5)
+              return merged.slice(-8)
             })
           }
         }
@@ -162,7 +172,9 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
       } catch (e: any) {
         setErr(e?.message || 'Failed to poll live trades')
       } finally {
-        if (!cancelled) timerRef.current = setTimeout(() => { void poll() }, POLL_MS)
+        if (!cancelled) {
+          timerRef.current = setTimeout(() => { void poll() }, POLL_MS)
+        }
       }
     }
 
@@ -174,47 +186,53 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
     }
   }, [address, client])
 
-  // UI
-  if (err) return <div style={{ opacity: 0.9, color: '#ff9f9f' }}>⚠ {err}</div>
-  if (!points.length) return <div style={{ opacity: 0.7 }}>No trades yet.</div>
-
-  // Normalize if all y equal (prevent flat line looking odd)
-  let ys = points.map(p => p.y)
-  const yMin = Math.min(...ys)
-  const yMax = Math.max(...ys)
-  if (yMax - yMin === 0) {
-    ys = points.map(() => points[0].y || 0)
-  }
-
-  const w = 600, h = 140, pad = 8
-  const xs = points.map((p) => p.x)
-  const xMin = Math.min(...xs), xMax = Math.max(...xs)
-  const dx = xMax - xMin || 1
-  const toX = (x: number) => pad + ((x - xMin) / dx) * (w - 2 * pad)
-  const toY = (y: number) => {
-    const ymin = Math.min(...ys), ymax = Math.max(...ys)
-    const dy = (ymax - ymin) || (ymax || 1)
-    return h - pad - ((y - ymin) / dy) * (h - 2 * pad)
-  }
-  const d = points
-    .map((p, i) => `${i ? 'L' : 'M'} ${toX(p.x).toFixed(2)} ${toY(p.y).toFixed(2)}`)
-    .join(' ')
-
+  // ----- UI -----
   return (
     <div>
-      <svg width={w} height={h}>
-        <path d={d} fill="none" stroke="currentColor" strokeWidth="2" />
-      </svg>
-      {/* tiny debug: last 5 parsed logs */}
-      <div style={{fontSize:12, opacity:.85, marginTop:8}}>
+      {err && <div style={{color:'#ff9f9f', marginBottom:8}}>⚠ {err}</div>}
+
+      {/* Ticker line chart (blocks on X, price on Y) */}
+      <div style={{width:'100%', height:240}}>
+        <ResponsiveContainer>
+          <LineChart data={data}>
+            <CartesianGrid strokeOpacity={0.15} />
+            <XAxis
+              dataKey="t"
+              tick={{ fontSize: 12 }}
+              axisLine={{ opacity: 0.3 }}
+              tickLine={{ opacity: 0.3 }}
+              tickFormatter={(v) => String(v)}
+            />
+            <YAxis
+              tick={{ fontSize: 12 }}
+              axisLine={{ opacity: 0.3 }}
+              tickLine={{ opacity: 0.3 }}
+              domain={['auto', 'auto']}
+              tickFormatter={(v) => v.toFixed(4)}
+            />
+            <Tooltip
+              formatter={(v: any) => [Number(v).toFixed(6) + ' ETH/token', 'Price']}
+              labelFormatter={(l: any) => `Block ${l}`}
+            />
+            <Line type="monotone" dataKey="price" dot={false} strokeWidth={2} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Recent event feed */}
+      <div style={{fontSize:12, opacity:.9, marginTop:12}}>
         <div><b>Last events:</b></div>
-        <ul style={{marginTop:4}}>
-          {rows.map((r,i) => (
-            <li key={i}>
-              blk {r.blk} · {r.name ?? '(unknown)'} · y={r.y.toFixed(6)} · args: {r.keys.join(', ')}
-            </li>
-          ))}
-        </ul>
+        {feed.length === 0 ? (
+          <div>No trades yet.</div>
+        ) : (
+          <ul style={{marginTop:4}}>
+            {feed.slice().reverse().map((r, i) => (
+              <li key={i}>
+                blk {r.blk} · {r.name} · price={r.price.toFixed(6)} · args: {r.args.join(', ')}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   )
