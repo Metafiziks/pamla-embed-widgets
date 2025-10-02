@@ -231,7 +231,7 @@ export default function TradeChart({
   }, [trades, intervalMs, rangeMs])
 
   // ---- Last price & Δ over the selected range ----
-  const lastClose = candles.at(-1)?.close
+  const lastClose = candles.length > 0 ? candles[candles.length - 1].close : undefined
   const firstInRange = candles[0]?.open ?? candles[0]?.close
   const deltaPct = (lastClose !== undefined && firstInRange !== undefined && firstInRange > 0)
     ? ((lastClose - firstInRange) / firstInRange) * 100
