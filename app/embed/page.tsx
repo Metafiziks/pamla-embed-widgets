@@ -196,20 +196,60 @@ function EmbedInner() {
   }
 }
 
+function pickSellCall(abi: Abi, {
+  amountIn,
+  minEthOut = 0n,
+  recipient,
+}: { amountIn: bigint; minEthOut?: bigint; recipient?: `0x${string}` }) {
+  // Gather candidate sell functions from ABI
+  const fns = (abi as any[]).filter(
+    (e) => e?.type === 'function' && typeof e?.name === 'string' && e.name.toLowerCase().includes('sell')
+  )
+
+  // Prefer common 2-arg variants: (uint256 amountIn, uint256 minEthOut)
+  for (const f of fns) {
+    const ins = f?.inputs || []
+    const types = ins.map((i: any) => (i?.type || '').toLowerCase())
+    // 2-args: uint256,uint256
+    if (types.length === 2 && types[0].startsWith('uint') && types[1].startsWith('uint')) {
+      return { functionName: f.name as any, args: [amountIn, minEthOut] as const }
+    }
+  }
+
+  // Next: common 3-arg variants (amountIn, minEthOut, recipient) in some order
+  for (const f of fns) {
+    const ins = f?.inputs || []
+    const types = ins.map((i: any) => (i?.type || '').toLowerCase())
+    if (types.length === 3 && types.filter((t: string) => t.startsWith('uint')).length >= 2 && types.includes('address')) {
+      // Assume [amountIn, minEthOut, recipient] if recipient provided, else fallback to sender
+      return { functionName: f.name as any, args: [amountIn, minEthOut, recipient] as const }
+    }
+  }
+
+  // Fallback: if there's a single-arg sell, try (amountIn)
+  for (const f of fns) {
+    const ins = f?.inputs || []
+    const types = ins.map((i: any) => (i?.type || '').toLowerCase())
+    if (types.length === 1 && types[0].startsWith('uint')) {
+      return { functionName: f.name as any, args: [amountIn] as const }
+    }
+  }
+
+  throw new Error('No compatible sell function found in BondingCurveToken ABI')
+}
+
 const doSell = async () => {
   try {
     if (!isConnected) { connect({ connector: injectedConnector }); return }
     if (!curve) return alert('Missing curve address')
-    if (phase === 0) { alert('Selling is paused right now'); return }
-
-    // Make sure you set this earlier in the file:
-    // const token = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}`
     if (!token) return alert('Missing token address (NEXT_PUBLIC_TOKEN)')
+    if (phase === 0) { alert('Selling is paused right now'); return }
 
     setBusy(true)
     const amountIn = parseEther(tokIn || '10')
 
-    console.log('[sell] reading allowance', { token, owner: address, spender: curve })
+    // 1) Check allowance
+    console.log('[sell] allowance check', { token, owner: address, spender: curve })
     const allowance = await pub.readContract({
       address: token,
       abi: ERC20ABI,
@@ -218,42 +258,42 @@ const doSell = async () => {
     }) as bigint
     console.log('[sell] allowance =', allowance.toString())
 
+    // 2) Approve if needed
     if (allowance < amountIn) {
-      console.log('[sell] approving amountIn', amountIn.toString())
+      console.log('[sell] approving', amountIn.toString())
       const approveHash = await wallet!.writeContract({
         account: address as `0x${string}`,
         chain: abstractSepolia,
         address: token,
         abi: ERC20ABI,
         functionName: 'approve',
-        args: [curve as `0x${string}`, amountIn], // or MaxUint256 for single approve
+        args: [curve as `0x${string}`, amountIn],
       })
-      console.log('[sell] approve tx =', approveHash)
       const approveRcpt = await pub.waitForTransactionReceipt({ hash: approveHash })
-      console.log('[sell] approve status =', approveRcpt.status)
       if (approveRcpt.status !== 'success') throw new Error('Approve failed')
+      console.log('[sell] approve success', approveHash)
     }
 
-    // Now sell. If your curve uses a different method, adjust here:
-    console.log('[sell] sending sellTokens', { amountIn: amountIn.toString() })
+    // 3) Auto-pick the correct sell function from ABI
+    const { functionName, args } = pickSellCall(TokenABI, {
+      amountIn,
+      minEthOut: 0n,
+      recipient: address as `0x${string}`, // used only if ABI expects it
+    })
+    console.log('[sell] calling', functionName, args)
+
     const sellHash = await wallet!.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
-      functionName: 'sellTokens', // <— if your ABI uses sellExactTokens, change it
-      args: [amountIn, 0n],       // [amountIn, minEthOut]
+      functionName,
+      args: args as any,
     })
-    console.log('[sell] sell tx =', sellHash)
     const sellRcpt = await pub.waitForTransactionReceipt({ hash: sellHash })
-    console.log('[sell] sell status =', sellRcpt.status)
-
-    if (sellRcpt.status === 'success') {
-      alert(`Sell confirmed: ${sellHash}`)
-    } else {
-      alert(`Transaction mined but not successful: ${sellHash}`)
-    }
-  } catch (e: any) {
+    if (sellRcpt.status === 'success') alert(`Sell confirmed: ${sellHash}`)
+    else alert(`Transaction mined but not successful: ${sellHash}`)
+  } catch (e:any) {
     console.error('[sell] error', e)
     alert(e?.shortMessage || e?.message || 'Sell failed')
   } finally {

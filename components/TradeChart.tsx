@@ -19,7 +19,6 @@ import {
   Tooltip,
   CartesianGrid,
   Bar,
-  Rectangle,
 } from 'recharts'
 
 import TokenJson from '@/lib/abi/BondingCurveToken.json'
@@ -48,6 +47,7 @@ const RPC = process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz
 
 // ---- Helpers ----
 function f18(x?: bigint) { return typeof x === 'bigint' ? Number(x) / 1e18 : undefined }
+
 // Your ABI: Buy(buyer, ethIn, tokensOut) -> price = ethIn / tokensOut
 function computePrice(args: Record<string, any>) {
   const ethIn = args.ethIn ?? args.eth ?? args.ethAmount ?? args.value
@@ -97,7 +97,7 @@ export default function TradeChart({
   const [range, setRange] = useState<RangeKey>(defaultRange)
   const rangeMs = RANGES.find(r => r.key === range)!.ms
 
-  // Keep raw trades (we’ll re-bucket when interval/range changes)
+  // Keep raw trades (we’ll re-bucket when interval/range change)
   const [trades, setTrades] = useState<Trade[]>([])
   const [feed, setFeed] = useState<Trade[]>([])
   const [err, setErr] = useState<string | null>(null)
@@ -158,6 +158,7 @@ export default function TradeChart({
           setTrades(windowed)
           setFeed(backfill.slice(-8))
           lastBlockRef.current = latest
+          console.debug('[chart] backfill trades=', windowed.length)
         }
       } catch (e:any) {
         if (!cancelled) setErr(e?.message || 'Failed to backfill trades')
@@ -191,7 +192,11 @@ export default function TradeChart({
             }
             if (incoming.length) {
               incoming.sort((a,b)=>a.ts-b.ts)
-              setTrades(prev => limitToWindow([...prev, ...incoming], 24*60*60*1000)) // keep ≤24h in memory
+              setTrades(prev => {
+                const merged = limitToWindow([...prev, ...incoming], 24*60*60*1000)
+                console.debug('[chart] incoming trades + window =', incoming.length, merged.length)
+                return merged
+              })
               setFeed(prev => [...prev, ...incoming].slice(-8))
             }
           }
@@ -227,8 +232,10 @@ export default function TradeChart({
         cur.count += 1
       }
     }
-    return [...byBucket.values()].sort((a,b)=>a.t-b.t)
-  }, [trades, intervalMs, rangeMs])
+    const out = [...byBucket.values()].sort((a,b)=>a.t-b.t)
+    // console.debug('[chart] candles=', out.length, 'interval=', interval, 'range=', range)
+    return out
+  }, [trades, intervalMs, rangeMs, interval, range])
 
   // ---- Last price & Δ over the selected range ----
   const lastClose = candles.length > 0 ? candles[candles.length - 1].close : undefined
@@ -300,105 +307,102 @@ export default function TradeChart({
 
       {/* Candles */}
       <div style={{ width:'100%', height:300, marginTop:36, overflow:'hidden' }}>
+        {data.length === 0 ? (
+          <div style={{opacity:.7, padding:'8px 0'}}>No trades yet in this range.</div>
+        ) : (
+          <ResponsiveContainer>
+            <ComposedChart data={data} margin={{ left: 8, right: 8, top: 8, bottom: 4 }}>
+              <CartesianGrid strokeOpacity={0.15} />
+              <XAxis
+                dataKey="x"
+                tick={{ fontSize: 12 }}
+                axisLine={{ opacity: 0.3 }}
+                tickLine={{ opacity: 0.3 }}
+                tickFormatter={(v) => new Date(Number(v)).toLocaleTimeString()}
+              />
+              <YAxis
+                yAxisId="price"
+                tick={{ fontSize: 12 }}
+                axisLine={{ opacity: 0.3 }}
+                tickLine={{ opacity: 0.3 }}
+                domain={([min, max]) => {
+                  // small padding so flat prices still show a body
+                  if (min === max) {
+                    const pad = min * 0.01 || 0.000001
+                    return [min - pad, max + pad]
+                  }
+                  const pad = (max - min) * 0.05
+                  return [min - pad, max + pad]
+                }}
+              />
+              <Tooltip
+                formatter={(_: any, __: any, p: any) => {
+                  const c = p?.payload as Candle
+                  return [
+                    `O:${c.open.toFixed(6)}  H:${c.high.toFixed(6)}  L:${c.low.toFixed(6)}  C:${c.close.toFixed(6)} (${c.count})`,
+                    'Candle',
+                  ]
+                }}
+                labelFormatter={(l:any) => new Date(Number(l)).toLocaleTimeString()}
+              />
 
-{data.length === 0 ? (
-  <div style={{opacity:.7, padding:'8px 0'}}>No trades yet in this range.</div>
-) : (
-        <ResponsiveContainer>
-          <ComposedChart data={data}>
-            <CartesianGrid strokeOpacity={0.15} />
-            <XAxis
-              dataKey="x"
-              tick={{ fontSize: 12 }}
-              axisLine={{ opacity: 0.3 }}
-              tickLine={{ opacity: 0.3 }}
-              tickFormatter={(v) => new Date(Number(v)).toLocaleTimeString()}
-            />
-            <YAxis
-  yAxisId="price"
-  tick={{ fontSize: 12 }}
-  axisLine={{ opacity: 0.3 }}
-  tickLine={{ opacity: 0.3 }}
-  domain={([min, max]) => {
-    if (min === max) {
-      const pad = min * 0.01 || 0.000001
-      return [min - pad, max + pad]
-    }
-    const pad = (max - min) * 0.05
-    return [min - pad, max + pad]
-  }}
-/>
+              {/* candle via custom Bar shape */}
+              <Bar
+                yAxisId="price"
+                dataKey="close"
+                fill="transparent"
+                shape={(props: any) => {
+                  const { x, width, payload } = props
+                  const c = payload as { open:number; close:number; high:number; low:number }
 
-            <Tooltip
-              formatter={(_: any, __: any, p: any) => {
-                const c = p?.payload as Candle
-                return [
-                  `O:${c.open.toFixed(6)}  H:${c.high.toFixed(6)}  L:${c.low.toFixed(6)}  C:${c.close.toFixed(6)} (${c.count})`,
-                  'Candle',
-                ]
-              }}
-              labelFormatter={(l:any) => new Date(Number(l)).toLocaleTimeString()}
-            />
-            {/* candle via custom Bar shape */}
-            <Bar
-  yAxisId="price"
-  dataKey="close"
-  fill="transparent"
-  shape={(props: any) => {
-    const { x, width, payload } = props
-const c: Candle = payload
+                  // try all places Recharts might stash the scale
+                  const yScale =
+                    props?.yAxis?.scale ||
+                    props?.yAxis?.axis?.scale ||
+                    props?.yAxis?.yAxisScale ||
+                    null
+                  if (!yScale) return null
 
-// Prefer a few places where Recharts puts the scale:
-const yScale =
-  props?.yAxis?.scale ||
-  props?.yAxis?.axis?.scale ||
-  props?.yAxis?.yAxisScale ||
-  null
-if (!yScale) return null
+                  const yOpen  = yScale(c.open)
+                  const yClose = yScale(c.close)
+                  const yHigh  = yScale(c.high)
+                  const yLow   = yScale(c.low)
 
-const yOpen  = yScale(c.open)
-const yClose = yScale(c.close)
-const yHigh  = yScale(c.high)
-const yLow   = yScale(c.low)
+                  const vals = [yOpen, yClose, yHigh, yLow]
+                  if (vals.some(v => typeof v !== 'number' || !isFinite(v))) return null
 
-const vals = [yOpen, yClose, yHigh, yLow]
-if (vals.some(v => typeof v !== 'number' || !isFinite(v))) return null
+                  const candleW = Math.max(3, Math.min(12, width * 0.6))
+                  const cx = x + width/2 - candleW/2
+                  const color = c.close >= c.open ? '#3ddc97' : '#ff7a7a'
 
-const candleW = Math.max(3, Math.min(12, width * 0.6))
-const cx = x + width / 2 - candleW / 2
-const color = c.close >= c.open ? '#3ddc97' : '#ff7a7a'
+                  const wickY = Math.min(yHigh, yLow)
+                  const wickH = Math.abs(yLow - yHigh) || 2
 
-// wick
-const wickY = Math.min(yHigh, yLow)
-const wickH = Math.abs(yLow - yHigh) || 2
+                  const bodyY = Math.min(yOpen, yClose)
+                  const rawH  = Math.abs(yClose - yOpen)
+                  const bodyH = rawH < 2 ? 2 : rawH // ensure visible
 
-// body (ensure ≥2 px so it’s visible even when open===close)
-const bodyY = Math.min(yOpen, yClose)
-const rawH  = Math.abs(yClose - yOpen)
-const bodyH = rawH < 2 ? 2 : rawH
-
-return (
-  <g>
-    {/* wick */}
-    <Rectangle x={x + width / 2 - 1} y={wickY} width={2} height={wickH} fill={color} />
-    {/* body */}
-    <Rectangle x={cx} y={bodyY} width={candleW} height={bodyH} fill={color} />
-    {/* baseline for ultra-flat candles (nice visual hint) */}
-    <Rectangle x={cx} y={bodyY + Math.max(0, bodyH - 1)} width={candleW} height={1} fill={color} />
-  </g>
-)
-
-  }}
-/>
-
-          </ComposedChart>
-        </ResponsiveContainer>
-)}
+                  return (
+                    <g>
+                      {/* wick */}
+                      <rect x={x + width/2 - 1} y={wickY} width={2} height={wickH} fill={color} />
+                      {/* body */}
+                      <rect x={cx} y={bodyY} width={candleW} height={bodyH} fill={color} />
+                      {/* baseline for ultra-flat candles */}
+                      <rect x={cx} y={bodyY + Math.max(0, bodyH - 1)} width={candleW} height={1} fill={color} />
+                    </g>
+                  )
+                }}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       {/* Recent trades feed (last 8) */}
       <div style={{fontSize:12, opacity:.9, marginTop:12, maxHeight:140, overflowY:'auto'}}>
         <div><b>Last events:</b></div>
+        {err && <div style={{color:'#ff9f9f'}}>⚠ {err}</div>}
         {feed.length === 0 ? (
           <div>No trades yet.</div>
         ) : (
