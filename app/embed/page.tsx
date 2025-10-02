@@ -12,7 +12,7 @@ const TokenABI = TokenJson.abi as Abi
 import AccessControllerJson from '@/lib/abi/AccessController.json'
 const ACLABI = AccessControllerJson.abi as Abi
 
-import { erc721Abi as ERC721ABI } from 'viem'
+import { erc20Abi as ERC20ABI, erc721Abi as ERC721ABI } from 'viem'
 const token = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}`
 import TradeChart from '../../components/TradeChart'
 
