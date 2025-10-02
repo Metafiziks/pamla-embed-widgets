@@ -13,11 +13,6 @@ import AccessControllerJson from '@/lib/abi/AccessController.json'
 const ACLABI = AccessControllerJson.abi as Abi
 
 import { erc20Abi as ERC20ABI, erc721Abi as ERC721ABI } from 'viem'
-const curve = (qs.get('curve') as `0x${string}` | null) || defaultCurve || null
-const envToken = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}`
-const token = (envToken && envToken.toLowerCase() !== '0x000000000000000000000000000000000000800a'
-  ? envToken
-  : (curve || '' as any)) as `0x${string}`
 import TradeChart from '../../components/TradeChart'
 
 export const dynamic = 'force-dynamic'
@@ -39,6 +34,11 @@ function EmbedInner() {
 
   const defaultCurve = process.env.NEXT_PUBLIC_DEFAULT_CURVE as `0x${string}` | undefined
   const curve = (qs.get('curve') as `0x${string}` | null) || defaultCurve || null
+
+const envToken = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}`
+const token = (envToken && envToken.toLowerCase() !== '0x000000000000000000000000000000000000800a'
+  ? envToken
+  : (curve || '' as any)) as `0x${string}`
 
   const defaultChain = Number(process.env.NEXT_PUBLIC_DEFAULT_CHAIN || '11124')
   const chain = Number(qs.get('chain') || defaultChain)
@@ -237,49 +237,39 @@ const doSell = async () => {
   try {
     if (!isConnected) { await connect({ connector: injectedConnector }); return }
     if (!curve) { console.log('Missing curve'); return }
-    if (phase === 0) { console.log('Selling paused'); return }
+    if (!token) { console.log('Missing token'); return }
+    if (phase === 0) { console.log('Selling is paused'); return }
 
     setBusy(true)
-
-    // Use resolved token (env token unless it's 0x800a/blank; else fallback to curve)
-    const tokenResolved = token || (curve as `0x${string}`)
-    console.log('[sell] begin', { curve, tokenResolved, amount: tokIn })
-
     const amountIn = parseEther(tokIn || '10')
 
-    // 1) Allowance on tokenResolved
+    // 1) allowance on token (resolved above)
     const allowance = await pub.readContract({
-      address: tokenResolved,
+      address: token,
       abi: ERC20ABI,
       functionName: 'allowance',
       args: [address as `0x${string}`, curve as `0x${string}`],
     }) as bigint
-    console.log('[sell] allowance', allowance.toString())
 
-    // 2) Approve if needed
+    // 2) approve if needed
     if (allowance < amountIn) {
-      console.log('[sell] approving…')
       const approveHash = await wallet!.writeContract({
         account: address as `0x${string}`,
         chain: abstractSepolia,
-        address: tokenResolved,
+        address: token,
         abi: ERC20ABI,
         functionName: 'approve',
         args: [curve as `0x${string}`, amountIn],
       })
-      const approveRcpt = await pub.waitForTransactionReceipt({ hash: approveHash })
-      if (approveRcpt.status !== 'success') throw new Error('Approve failed')
-      console.log('[sell] approve confirmed', approveHash)
+      await pub.waitForTransactionReceipt({ hash: approveHash })
     }
 
-    // 3) Pick sell function from your curve ABI (keeps working even if fn name changes)
+    // 3) simulate & send sell on curve
     const { functionName, args } = pickSellCall(TokenABI, {
       amountIn,
       minEthOut: 0n,
       recipient: address as `0x${string}`,
     })
-    console.log('[sell] simulating', functionName, args)
-
     const sim = await pub.simulateContract({
       address: curve as `0x${string}`,
       abi: TokenABI,
@@ -288,13 +278,8 @@ const doSell = async () => {
       account: address as `0x${string}`,
       chain: abstractSepolia,
     })
-    console.log('[sell] simulate ok')
-
-    // 4) Send with simulated request (best gas params)
     const sellHash = await wallet!.writeContract(sim.request)
-    console.log('[sell] sent', sellHash)
-    const sellRcpt = await pub.waitForTransactionReceipt({ hash: sellHash })
-    console.log('[sell] receipt', sellRcpt.status)
+    await pub.waitForTransactionReceipt({ hash: sellHash })
   } catch (e:any) {
     console.error('[sell] error', e)
   } finally {
