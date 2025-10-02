@@ -13,7 +13,11 @@ import AccessControllerJson from '@/lib/abi/AccessController.json'
 const ACLABI = AccessControllerJson.abi as Abi
 
 import { erc20Abi as ERC20ABI, erc721Abi as ERC721ABI } from 'viem'
-const token = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}`
+const curve = (qs.get('curve') as `0x${string}` | null) || defaultCurve || null
+const envToken = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}`
+const token = (envToken && envToken.toLowerCase() !== '0x000000000000000000000000000000000000800a'
+  ? envToken
+  : (curve || '' as any)) as `0x${string}`
 import TradeChart from '../../components/TradeChart'
 
 export const dynamic = 'force-dynamic'
@@ -231,56 +235,50 @@ function pickSellCall(abi: Abi, {
 
 const doSell = async () => {
   try {
-    if (!isConnected) { connect({ connector: injectedConnector }); return }
-    if (!curve) return alert('Missing curve address')
-    if (!token) return alert('Missing token address (NEXT_PUBLIC_TOKEN)')
-    if (phase === 0) { alert('Selling is paused right now'); return }
+    if (!isConnected) { await connect({ connector: injectedConnector }); return }
+    if (!curve) { console.log('Missing curve'); return }
+    if (phase === 0) { console.log('Selling paused'); return }
 
     setBusy(true)
 
-    // 0) Ensure we’re on Abstract Sepolia
-    try {
-      // @ts-ignore – some injected wallets expose this, some auto-switch
-      if (wallet?.switchChain) await (wallet as any).switchChain({ id: abstractSepolia.id })
-    } catch (e) {
-      console.warn('[sell] switchChain failed or unsupported, continuing…', e)
-    }
+    // Use resolved token (env token unless it's 0x800a/blank; else fallback to curve)
+    const tokenResolved = token || (curve as `0x${string}`)
+    console.log('[sell] begin', { curve, tokenResolved, amount: tokIn })
 
     const amountIn = parseEther(tokIn || '10')
-    console.log('[sell] start', { token, curve, amountIn: amountIn.toString() })
 
-    // 1) Allowance
+    // 1) Allowance on tokenResolved
     const allowance = await pub.readContract({
-      address: token,
+      address: tokenResolved,
       abi: ERC20ABI,
       functionName: 'allowance',
       args: [address as `0x${string}`, curve as `0x${string}`],
     }) as bigint
     console.log('[sell] allowance', allowance.toString())
 
+    // 2) Approve if needed
     if (allowance < amountIn) {
       console.log('[sell] approving…')
       const approveHash = await wallet!.writeContract({
         account: address as `0x${string}`,
         chain: abstractSepolia,
-        address: token,
+        address: tokenResolved,
         abi: ERC20ABI,
         functionName: 'approve',
         args: [curve as `0x${string}`, amountIn],
       })
-      console.log('[sell] approve tx', approveHash)
       const approveRcpt = await pub.waitForTransactionReceipt({ hash: approveHash })
       if (approveRcpt.status !== 'success') throw new Error('Approve failed')
-      console.log('[sell] approve confirmed')
+      console.log('[sell] approve confirmed', approveHash)
     }
 
-    // 2) Pick sell function + simulate
+    // 3) Pick sell function from your curve ABI (keeps working even if fn name changes)
     const { functionName, args } = pickSellCall(TokenABI, {
       amountIn,
       minEthOut: 0n,
       recipient: address as `0x${string}`,
     })
-    console.log('[sell] chosen fn', functionName, 'args', args)
+    console.log('[sell] simulating', functionName, args)
 
     const sim = await pub.simulateContract({
       address: curve as `0x${string}`,
@@ -290,18 +288,15 @@ const doSell = async () => {
       account: address as `0x${string}`,
       chain: abstractSepolia,
     })
-    console.log('[sell] simulate ok', sim?.request)
+    console.log('[sell] simulate ok')
 
-    // 3) Send using the simulated request (best gas params)
+    // 4) Send with simulated request (best gas params)
     const sellHash = await wallet!.writeContract(sim.request)
-    console.log('[sell] tx', sellHash)
+    console.log('[sell] sent', sellHash)
     const sellRcpt = await pub.waitForTransactionReceipt({ hash: sellHash })
     console.log('[sell] receipt', sellRcpt.status)
-    if (sellRcpt.status === 'success') alert(`Sell confirmed: ${sellHash}`)
-    else alert(`Transaction mined but not successful: ${sellHash}`)
-  } catch (e: any) {
+  } catch (e:any) {
     console.error('[sell] error', e)
-    alert(e?.shortMessage || e?.message || 'Sell failed')
   } finally {
     setBusy(false)
   }
