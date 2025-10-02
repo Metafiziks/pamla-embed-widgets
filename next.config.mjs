@@ -9,18 +9,22 @@ const nextConfig = {
 
     // Build the frame-ancestors directive
     // NOTE: wildcard subdomains only work if you specify them (e.g., https://*.hostingerpreview.com)
-    const frameAncestors = ["'self'", ...list].join(' ');
+   const frameAncestors = ["'self'", ...list].join(' ');
 
-    return [
+return [
+  {
+    source: '/(.*)',
+    headers: [
       {
-        source: '/(.*)',
-        headers: [
-          // Only control frame ancestry; don’t add X-Frame-Options (it conflicts with CSP)
-          { key: 'Content-Security-Policy', value: `frame-ancestors ${frameAncestors};` },
-        ],
+        key: 'Content-Security-Policy',
+        value: `
+          frame-ancestors ${frameAncestors};
+          script-src 'self' 'unsafe-eval';
+        `.replace(/\s+/g, ' ')
       },
-    ];
+    ],
   },
-};
+];
+
 
 export default nextConfig;

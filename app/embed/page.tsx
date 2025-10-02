@@ -236,51 +236,85 @@ function pickSellCall(abi: Abi, {
 const doSell = async () => {
   try {
     if (!isConnected) { await connect({ connector: injectedConnector }); return }
-    if (!curve) { console.log('Missing curve'); return }
-    if (!token) { console.log('Missing token'); return }
-    if (phase === 0) { console.log('Selling is paused'); return }
+    if (!curve) { console.log('[sell] Missing curve'); return }
+    if (phase === 0) { console.log('[sell] Paused'); return }
 
     setBusy(true)
-    const amountIn = parseEther(tokIn || '10')
 
-    // 1) allowance on token (resolved above)
+    // IMPORTANT: for your contract, the curve is also the ERC-20 token.
+    // If you already compute `token` above, you can use that; otherwise:
+    const tokenAddr = curve as `0x${string}`
+
+    // Amount (tokens have 18 decimals)
+    const amountIn = parseEther(tokIn || '0')
+    if (amountIn <= 0n) { console.log('[sell] amountIn must be > 0'); return }
+
+    console.log('[sell] start', { curve, token: tokenAddr, amountIn: amountIn.toString() })
+
+    // 0) Curve ETH liquidity preflight (must have ETH to pay you back)
+    const curveEthBal = await pub.getBalance({ address: curve as `0x${string}` })
+    if (curveEthBal === 0n) {
+      console.log('[sell] Curve has 0 ETH, cannot pay out sells yet')
+      return
+    }
+
+    // 1) Token balance preflight
+    const myBal = await pub.readContract({
+      address: tokenAddr,
+      abi: ERC20ABI,
+      functionName: 'balanceOf',
+      args: [address as `0x${string}`],
+    }) as bigint
+    if (myBal < amountIn) {
+      console.log('[sell] Not enough token balance', { myBal: myBal.toString() })
+      return
+    }
+
+    // 2) Allowance (token is the curve)
     const allowance = await pub.readContract({
-      address: token,
+      address: tokenAddr,
       abi: ERC20ABI,
       functionName: 'allowance',
       args: [address as `0x${string}`, curve as `0x${string}`],
     }) as bigint
+    console.log('[sell] allowance', allowance.toString())
 
-    // 2) approve if needed
     if (allowance < amountIn) {
+      console.log('[sell] approving…')
       const approveHash = await wallet!.writeContract({
         account: address as `0x${string}`,
         chain: abstractSepolia,
-        address: token,
+        address: tokenAddr,
         abi: ERC20ABI,
         functionName: 'approve',
         args: [curve as `0x${string}`, amountIn],
       })
-      await pub.waitForTransactionReceipt({ hash: approveHash })
+      const approveRcpt = await pub.waitForTransactionReceipt({ hash: approveHash })
+      if (approveRcpt.status !== 'success') {
+        console.log('[sell] approve failed')
+        return
+      }
+      console.log('[sell] approve confirmed', approveHash)
     }
 
-    // 3) simulate & send sell on curve
-    const { functionName, args } = pickSellCall(TokenABI, {
-      amountIn,
-      minEthOut: 0n,
-      recipient: address as `0x${string}`,
-    })
+    // 3) Simulate explicit 2-arg sellTokens(amountIn, minEthOut) per your ABI
+    // Use minEthOut = 1 wei to avoid zero-min edge-case
     const sim = await pub.simulateContract({
       address: curve as `0x${string}`,
       abi: TokenABI,
-      functionName,
-      args: args as any,
+      functionName: 'sellTokens',
+      args: [amountIn, 1n],
       account: address as `0x${string}`,
       chain: abstractSepolia,
     })
+    console.log('[sell] simulate ok')
+
+    // 4) Send & await receipt
     const sellHash = await wallet!.writeContract(sim.request)
-    await pub.waitForTransactionReceipt({ hash: sellHash })
-  } catch (e:any) {
+    console.log('[sell] sent', sellHash)
+    const sellRcpt = await pub.waitForTransactionReceipt({ hash: sellHash })
+    console.log('[sell] receipt', sellRcpt.status)
+  } catch (e: any) {
     console.error('[sell] error', e)
   } finally {
     setBusy(false)
