@@ -22,13 +22,13 @@ export const client = createPublicClient({
 export const registry = getContract({
   address: ADDRESSES.REGISTRY,
   abi: (RegistryAbi as any).abi ?? RegistryAbi,
-  client,
+  publicClient,
 });
 
 export const factory = getContract({
   address: ADDRESSES.FACTORY,
   abi: (FactoryAbi as any).abi ?? FactoryAbi,
-  client,
+  publicClient,
 });
 
 // per-song token (dynamic address)
