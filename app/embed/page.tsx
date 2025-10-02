@@ -13,6 +13,7 @@ import AccessControllerJson from '@/lib/abi/AccessController.json'
 const ACLABI = AccessControllerJson.abi as Abi
 
 import { erc721Abi as ERC721ABI } from 'viem'
+const token = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}`
 import TradeChart from '../../components/TradeChart'
 
 export const dynamic = 'force-dynamic'
@@ -198,27 +199,46 @@ function EmbedInner() {
 const doSell = async () => {
   if (!isConnected) { connect({ connector: injectedConnector }); return }
   if (!curve) return alert('Missing curve address')
-  // Optional safety: don’t allow sell when paused
+  if (!token) return alert('Missing token address (NEXT_PUBLIC_TOKEN)')
   if (phase === 0) { alert('Selling is paused right now'); return }
 
   setBusy(true)
   try {
     const amountIn = parseEther(tokIn || '10')
 
-    // 1) Send tx and capture hash
+    // 1) Check allowance
+    const allowance = await pub.readContract({
+      address: token,
+      abi: ERC20ABI,
+      functionName: 'allowance',
+      args: [address as `0x${string}`, curve as `0x${string}`],
+    }) as bigint
+
+    // 2) Approve if needed
+    if (allowance < amountIn) {
+      const approveHash = await wallet!.writeContract({
+        account: address as `0x${string}`,
+        chain: abstractSepolia,
+        address: token,
+        abi: ERC20ABI,
+        functionName: 'approve',
+        args: [curve as `0x${string}`, amountIn],
+      })
+      const approveRcpt = await pub.waitForTransactionReceipt({ hash: approveHash })
+      if (approveRcpt.status !== 'success') throw new Error('Approve failed')
+    }
+
+    // 3) Sell
     const hash = await wallet!.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
-      functionName: 'sellTokens',        // keep your curve’s exact name
-      args: [amountIn, 0n],              // [minEthOut] set to 0n for now
+      functionName: 'sellTokens',
+      args: [amountIn, 0n], // minEthOut=0 for now
     })
-
-    // 2) Wait for confirmation
-    const receipt = await pub.waitForTransactionReceipt({ hash })
-
-    if (receipt.status === 'success') {
+    const rcpt = await pub.waitForTransactionReceipt({ hash })
+    if (rcpt.status === 'success') {
       alert(`Sell confirmed: ${hash}`)
     } else {
       alert(`Transaction mined but not successful: ${hash}`)

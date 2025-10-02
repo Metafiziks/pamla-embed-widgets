@@ -6,220 +6,349 @@ import {
   http,
   type Abi,
   parseEventLogs,
+  Hex,
 } from 'viem'
 import { abstractSepolia } from '@/lib/wagmi'
-import TokenJson from '@/lib/abi/BondingCurveToken.json'
-// If your trade events are on the *curve* (not the token), keep using this ABI.
-// If they’re on a separate Curve ABI file, swap it in here.
-const TokenABI = TokenJson.abi as Abi
 
 // Recharts
 import {
-  LineChart,
-  Line,
+  ComposedChart,
+  ResponsiveContainer,
   XAxis,
   YAxis,
-  CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
+  CartesianGrid,
+  Bar,
+  Rectangle,
 } from 'recharts'
 
-type TPoint = { t: number; price: number }   // t = blockNumber (or timestamp), price in ETH/token
-type TFeed  = { blk: number; name: string; price: number; args: string[] }
+import TokenJson from '@/lib/abi/BondingCurveToken.json'
+const TokenABI = TokenJson.abi as Abi
 
-const MAX_POINTS = 400            // keep a decent window
-const POLL_MS = 6000              // 6s
+type Trade = {
+  ts: number      // unix ms
+  blk: number
+  price: number   // ETH per token
+  tx: Hex
+  name: string
+  args: string[]
+}
+type Candle = {
+  t: number       // bucket start unix ms
+  open: number
+  high: number
+  low: number
+  close: number
+  count: number
+}
+
+const POLL_MS = 6000
 const TRADE_NAMES = new Set(['Buy','Bought','Sell','Sold','TokensPurchased','TokensSold','Trade'])
+const RPC = process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'
 
-// Convert bigint 18 decimals => JS number
-function f18(x?: bigint) {
-  if (typeof x !== 'bigint') return undefined
-  // Note: Number(bigint)/1e18 is okay for charting (display), not for accounting.
-  return Number(x) / 1e18
-}
-
-// Compute price from typical arg names; for your case, ethIn / tokensOut.
-function computePrice(args: Record<string, any>): number {
-  // preferred direct price fields if present
-  const direct =
-      f18(args.priceAfter) ??
-      f18(args.price) ??
-      (typeof args.quotePerBase === 'bigint' ? f18(args.quotePerBase) : undefined)
-  if (typeof direct === 'number') return direct
-
-  // common pairs
-  const ethIn     = args.ethIn     ?? args.ethAmount ?? args.eth ?? args.value
-  const ethOut    = args.ethOut
-  const tokensIn  = args.tokensIn  ?? args.tokenIn  ?? args.amountIn  ?? args.tokenAmount
+// ---- Helpers ----
+function f18(x?: bigint) { return typeof x === 'bigint' ? Number(x) / 1e18 : undefined }
+// Your ABI: Buy(buyer, ethIn, tokensOut) -> price = ethIn / tokensOut
+function computePrice(args: Record<string, any>) {
+  const ethIn = args.ethIn ?? args.eth ?? args.ethAmount ?? args.value
   const tokensOut = args.tokensOut ?? args.tokenOut ?? args.amountOut
-
-  // Your debug shows: buyer, ethIn, tokensOut
-  const candidates: Array<[any, any]> = [
-    [ethIn, tokensOut], // ✅ your main case
-    [ethOut, tokensIn],
-    [ethIn, tokensIn],
-    [ethOut, tokensOut],
-  ]
-
-  for (const [q, b] of candidates) {
-    if (typeof q === 'bigint' && typeof b === 'bigint' && b !== 0n) {
-      const qf = f18(q)!, bf = f18(b)!
-      if (bf > 0) return qf / bf
-    }
+  if (typeof ethIn === 'bigint' && typeof tokensOut === 'bigint' && tokensOut !== 0n) {
+    return (f18(ethIn)! / f18(tokensOut)!)
   }
-  return 0
+  const direct = f18(args.priceAfter) ?? f18(args.price)
+  return typeof direct === 'number' ? direct : 0
 }
 
-export default function TradeChart({ address }: { address: `0x${string}` }) {
+// Candle interval options
+const INTERVALS = [
+  { key: '1m', ms: 60_000 },
+  { key: '5m', ms: 5 * 60_000 },
+  { key: '15m', ms: 15 * 60_000 },
+] as const
+type IntervalKey = typeof INTERVALS[number]['key']
+
+// Time range window options
+const RANGES = [
+  { key: '1h', ms: 1 * 60 * 60 * 1000 },
+  { key: '4h', ms: 4 * 60 * 60 * 1000 },
+  { key: '24h', ms: 24 * 60 * 60 * 1000 },
+] as const
+type RangeKey = typeof RANGES[number]['key']
+
+export default function TradeChart({
+  address,
+  symbol = '$PAMLA',
+  defaultInterval = '1m',
+  defaultRange = '24h',
+}: {
+  address: `0x${string}`
+  symbol?: string
+  defaultInterval?: IntervalKey
+  defaultRange?: RangeKey
+}) {
   const client = useMemo(
-    () => createPublicClient({
-      chain: abstractSepolia,
-      transport: http(process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'),
-    }),
+    () => createPublicClient({ chain: abstractSepolia, transport: http(RPC) }),
     []
   )
 
-  const [data, setData] = useState<TPoint[]>([])
-  const [feed, setFeed] = useState<TFeed[]>([])
+  const [interval, setInterval] = useState<IntervalKey>(defaultInterval)
+  const intervalMs = INTERVALS.find(i => i.key === interval)!.ms
+
+  const [range, setRange] = useState<RangeKey>(defaultRange)
+  const rangeMs = RANGES.find(r => r.key === range)!.ms
+
+  // Keep raw trades (we’ll re-bucket when interval/range changes)
+  const [trades, setTrades] = useState<Trade[]>([])
+  const [feed, setFeed] = useState<Trade[]>([])
   const [err, setErr] = useState<string | null>(null)
 
   const lastBlockRef = useRef<bigint | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const blockTimeCache = useRef<Map<bigint, number>>(new Map()) // blk -> unix ms
 
+  const getBlockTime = async (blockNumber: bigint) => {
+    const c = blockTimeCache.current.get(blockNumber)
+    if (c) return c
+    const b = await client.getBlock({ blockNumber })
+    const ts = Number(b.timestamp) * 1000
+    blockTimeCache.current.set(blockNumber, ts)
+    return ts
+  }
+
+  // Limit an array of trades to a moving window ending "now", with a hard cap for memory
+  function limitToWindow(list: Trade[], windowMs: number) {
+    const cutoff = Date.now() - windowMs
+    let i = list.findIndex(t => t.ts >= cutoff)
+    if (i === -1) i = Math.max(0, list.length - 5000) // emergency cap
+    return list.slice(i)
+  }
+
+  // ---- Backfill + poll trades (pure getLogs; no filters) ----
   useEffect(() => {
     let cancelled = false
 
-    async function backfill() {
-      setErr(null); setData([]); setFeed([]); lastBlockRef.current = null
+    const run = async () => {
+      setErr(null); setTrades([]); setFeed([]); lastBlockRef.current = null
+
       try {
         const latest = await client.getBlockNumber()
-        const span = 50_000n
+        // Backfill enough history to cover 24h+ comfortably
+        const span = 80_000n
         const fromBlock = latest > span ? latest - span : 0n
 
         const logs = await client.getLogs({ address, fromBlock, toBlock: latest })
         const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
 
-        const pts: TPoint[] = []
-        const rows: TFeed[] = []
-
+        const backfill: Trade[] = []
         for (const l of parsed) {
           const name = l.eventName || ''
           if (!TRADE_NAMES.has(name)) continue
           const args: any = l.args || {}
           const price = computePrice(args)
-          const blk = Number(l.blockNumber ?? 0n)
-          pts.push({ t: blk, price })
-          rows.push({ blk, name, price, args: Object.keys(args) })
+          const blk = l.blockNumber ?? 0n
+          const ts  = await getBlockTime(blk)
+          backfill.push({
+            ts, blk: Number(blk), price,
+            tx: l.transactionHash as Hex, name, args: Object.keys(args || {}),
+          })
         }
-
         if (!cancelled) {
-          pts.sort((a, b) => a.t - b.t)
-          rows.sort((a, b) => a.blk - b.blk)
-          setData(pts.slice(-MAX_POINTS))
-          setFeed(rows.slice(-8)) // last 8 rows
+          backfill.sort((a,b)=>a.ts-b.ts)
+          const windowed = limitToWindow(backfill, 24 * 60 * 60 * 1000) // store max ~24h in memory
+          setTrades(windowed)
+          setFeed(backfill.slice(-8))
           lastBlockRef.current = latest
         }
-      } catch (e: any) {
+      } catch (e:any) {
         if (!cancelled) setErr(e?.message || 'Failed to backfill trades')
       }
-    }
 
-    async function poll() {
-      if (cancelled) return
-      try {
-        const latest = await client.getBlockNumber()
-        const fromBlock =
-          lastBlockRef.current && latest > lastBlockRef.current
-            ? lastBlockRef.current + 1n
-            : latest
+      const loop = async () => {
+        if (cancelled) return
+        try {
+          const latest = await client.getBlockNumber()
+          const fromBlock =
+            lastBlockRef.current && latest > lastBlockRef.current
+              ? lastBlockRef.current + 1n
+              : latest
 
-        if (fromBlock <= latest) {
-          const logs = await client.getLogs({ address, fromBlock, toBlock: latest })
-          const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
+          if (fromBlock <= latest) {
+            const logs = await client.getLogs({ address, fromBlock, toBlock: latest })
+            const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
 
-          const incomingPts: TPoint[] = []
-          const incomingRows: TFeed[] = []
-
-          for (const l of parsed) {
-            const name = l.eventName || ''
-            if (!TRADE_NAMES.has(name)) continue
-            const args: any = l.args || {}
-            const price = computePrice(args)
-            const blk = Number(l.blockNumber ?? 0n)
-            incomingPts.push({ t: blk, price })
-            incomingRows.push({ blk, name, price, args: Object.keys(args) })
+            const incoming: Trade[] = []
+            for (const l of parsed) {
+              const name = l.eventName || ''
+              if (!TRADE_NAMES.has(name)) continue
+              const args: any = l.args || {}
+              const price = computePrice(args)
+              const blk = l.blockNumber ?? 0n
+              const ts  = await getBlockTime(blk)
+              incoming.push({
+                ts, blk: Number(blk), price,
+                tx: l.transactionHash as Hex, name, args: Object.keys(args || {}),
+              })
+            }
+            if (incoming.length) {
+              incoming.sort((a,b)=>a.ts-b.ts)
+              setTrades(prev => limitToWindow([...prev, ...incoming], 24*60*60*1000)) // keep ≤24h in memory
+              setFeed(prev => [...prev, ...incoming].slice(-8))
+            }
           }
-
-          if (incomingPts.length) {
-            setData(prev => {
-              const merged = [...prev, ...incomingPts].sort((a, b) => a.t - b.t)
-              // de-dup per block number
-              const dedup: TPoint[] = []
-              for (const p of merged) {
-                if (!dedup.length || dedup[dedup.length - 1].t !== p.t) dedup.push(p)
-                else dedup[dedup.length - 1] = p
-              }
-              return dedup.slice(-MAX_POINTS)
-            })
-            setFeed(prev => {
-              const merged = [...prev, ...incomingRows].sort((a, b) => a.blk - b.blk)
-              return merged.slice(-8)
-            })
-          }
-        }
-
-        lastBlockRef.current = latest
-      } catch (e: any) {
-        setErr(e?.message || 'Failed to poll live trades')
-      } finally {
-        if (!cancelled) {
-          timerRef.current = setTimeout(() => { void poll() }, POLL_MS)
+          lastBlockRef.current = latest
+        } catch (e:any) {
+          setErr(e?.message || 'Failed to poll live trades')
+        } finally {
+          timerRef.current = setTimeout(loop, POLL_MS)
         }
       }
+      timerRef.current = setTimeout(loop, POLL_MS)
     }
 
-    void backfill().then(() => { void poll() })
-
-    return () => {
-      cancelled = true
-      if (timerRef.current) clearTimeout(timerRef.current)
-    }
+    run()
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
   }, [address, client])
 
-  // ----- UI -----
-  return (
-    <div>
-      {err && <div style={{color:'#ff9f9f', marginBottom:8}}>⚠ {err}</div>}
+  // ---- Recompute candles for the selected interval & range ----
+  const candles: Candle[] = useMemo(() => {
+    const cutoff = Date.now() - rangeMs
+    const windowed = trades.filter(t => t.ts >= cutoff)
 
-      {/* Ticker line chart (blocks on X, price on Y) */}
-      <div style={{width:'100%', height:240}}>
+    const byBucket = new Map<number, Candle>()
+    for (const tr of windowed) {
+      const bucket = Math.floor(tr.ts / intervalMs) * intervalMs
+      const cur = byBucket.get(bucket)
+      if (!cur) {
+        byBucket.set(bucket, { t: bucket, open: tr.price, high: tr.price, low: tr.price, close: tr.price, count: 1 })
+      } else {
+        cur.high = Math.max(cur.high, tr.price)
+        cur.low  = Math.min(cur.low, tr.price)
+        cur.close = tr.price
+        cur.count += 1
+      }
+    }
+    return [...byBucket.values()].sort((a,b)=>a.t-b.t)
+  }, [trades, intervalMs, rangeMs])
+
+  // ---- Last price & Δ over the selected range ----
+  const lastClose = candles.at(-1)?.close
+  const firstInRange = candles[0]?.open ?? candles[0]?.close
+  const deltaPct = (lastClose !== undefined && firstInRange !== undefined && firstInRange > 0)
+    ? ((lastClose - firstInRange) / firstInRange) * 100
+    : undefined
+
+  // ---- UI ----
+  const data = candles.map(c => ({ ...c, x: c.t }))
+
+  return (
+    <div style={{ position:'relative' }}>
+      {/* Left controls: interval & range */}
+      <div style={{ position:'absolute', left:8, top:8, display:'flex', gap:8, flexWrap:'wrap' }}>
+        <div>
+          {INTERVALS.map(i => (
+            <button
+              key={i.key}
+              onClick={() => setInterval(i.key)}
+              style={{
+                padding:'4px 8px', border:'1px solid #2a2a2a', borderRadius:9999,
+                background: interval === i.key ? '#1f1f22' : '#151515',
+                color:'#fff', fontSize:12, cursor:'pointer', marginRight:6
+              }}
+            >
+              {i.key}
+            </button>
+          ))}
+        </div>
+        <div>
+          {RANGES.map(r => (
+            <button
+              key={r.key}
+              onClick={() => setRange(r.key)}
+              style={{
+                padding:'4px 8px', border:'1px solid #2a2a2a', borderRadius:9999,
+                background: range === r.key ? '#1f1f22' : '#151515',
+                color:'#fff', fontSize:12, cursor:'pointer', marginRight:6
+              }}
+            >
+              {r.key}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Right badge: symbol + last + Δ over selected range */}
+      <div style={{ position:'absolute', right:8, top:8, display:'flex', gap:8, alignItems:'center' }}>
+        <span style={{ padding:'4px 8px', border:'1px solid #2a2a2a', borderRadius:9999, background:'#151515', fontSize:12 }}>
+          {symbol}
+        </span>
+        <span style={{ fontSize:12, opacity:.9 }}>
+          {lastClose !== undefined ? lastClose.toFixed(6) + ' ETH' : '—'}
+        </span>
+        <span
+          style={{
+            fontSize:12,
+            color: deltaPct === undefined ? '#aaa'
+                  : deltaPct >= 0 ? '#3ddc97' : '#ff7a7a',
+          }}
+          title={`Change over ${range}`}
+        >
+          {deltaPct === undefined ? '—' : `${deltaPct >= 0 ? '▲' : '▼'} ${Math.abs(deltaPct).toFixed(2)}%`}
+        </span>
+      </div>
+
+      {/* Candles */}
+      <div style={{ width:'100%', height:300, marginTop:36 }}>
         <ResponsiveContainer>
-          <LineChart data={data}>
+          <ComposedChart data={data}>
             <CartesianGrid strokeOpacity={0.15} />
             <XAxis
-              dataKey="t"
+              dataKey="x"
               tick={{ fontSize: 12 }}
               axisLine={{ opacity: 0.3 }}
               tickLine={{ opacity: 0.3 }}
-              tickFormatter={(v) => String(v)}
+              tickFormatter={(v) => new Date(Number(v)).toLocaleTimeString()}
             />
             <YAxis
               tick={{ fontSize: 12 }}
               axisLine={{ opacity: 0.3 }}
               tickLine={{ opacity: 0.3 }}
-              domain={['auto', 'auto']}
-              tickFormatter={(v) => v.toFixed(4)}
+              domain={['auto','auto']}
             />
             <Tooltip
-              formatter={(v: any) => [Number(v).toFixed(6) + ' ETH/token', 'Price']}
-              labelFormatter={(l: any) => `Block ${l}`}
+              formatter={(_: any, __: any, p: any) => {
+                const c = p?.payload as Candle
+                return [
+                  `O:${c.open.toFixed(6)}  H:${c.high.toFixed(6)}  L:${c.low.toFixed(6)}  C:${c.close.toFixed(6)} (${c.count})`,
+                  'Candle',
+                ]
+              }}
+              labelFormatter={(l:any) => new Date(Number(l)).toLocaleTimeString()}
             />
-            <Line type="monotone" dataKey="price" dot={false} strokeWidth={2} />
-          </LineChart>
+            {/* candle via custom Bar shape */}
+            <Bar dataKey="close" fill="transparent" shape={(props:any) => {
+              const { x, width, payload, yAxis } = props
+              const c: Candle = payload
+              const yOpen = yAxis.scale(c.open)
+              const yClose= yAxis.scale(c.close)
+              const yHigh = yAxis.scale(c.high)
+              const yLow  = yAxis.scale(c.low)
+              const candleW = Math.max(3, width * 0.6)
+              const cx = x + width/2 - candleW/2
+              const color = c.close >= c.open ? '#3ddc97' : '#ff7a7a'
+              return (
+                <g>
+                  {/* wick */}
+                  <Rectangle x={x + width/2 - 1} y={Math.min(yHigh,yLow)} width={2} height={Math.abs(yLow - yHigh)} fill={color} />
+                  {/* body */}
+                  <Rectangle x={cx} y={Math.min(yOpen,yClose)} width={candleW} height={Math.abs(yClose - yOpen) || 2} fill={color} />
+                </g>
+              )
+            }} />
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Recent event feed */}
+      {/* Recent trades feed (last 8) */}
       <div style={{fontSize:12, opacity:.9, marginTop:12}}>
         <div><b>Last events:</b></div>
         {feed.length === 0 ? (
