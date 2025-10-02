@@ -297,7 +297,11 @@ export default function TradeChart({
       </div>
 
       {/* Candles */}
-      <div style={{ width:'100%', height:300, marginTop:36 }}>
+      <div style={{ width:'100%', height:300, marginTop:36, overflow:'hidden' }}>
+
+{data.length === 0 ? (
+  <div style={{opacity:.7, padding:'8px 0'}}>No trades yet in this range.</div>
+) : (
         <ResponsiveContainer>
           <ComposedChart data={data}>
             <CartesianGrid strokeOpacity={0.15} />
@@ -325,31 +329,59 @@ export default function TradeChart({
               labelFormatter={(l:any) => new Date(Number(l)).toLocaleTimeString()}
             />
             {/* candle via custom Bar shape */}
-            <Bar dataKey="close" fill="transparent" shape={(props:any) => {
-              const { x, width, payload, yAxis } = props
-              const c: Candle = payload
-              const yOpen = yAxis.scale(c.open)
-              const yClose= yAxis.scale(c.close)
-              const yHigh = yAxis.scale(c.high)
-              const yLow  = yAxis.scale(c.low)
-              const candleW = Math.max(3, width * 0.6)
-              const cx = x + width/2 - candleW/2
-              const color = c.close >= c.open ? '#3ddc97' : '#ff7a7a'
-              return (
-                <g>
-                  {/* wick */}
-                  <Rectangle x={x + width/2 - 1} y={Math.min(yHigh,yLow)} width={2} height={Math.abs(yLow - yHigh)} fill={color} />
-                  {/* body */}
-                  <Rectangle x={cx} y={Math.min(yOpen,yClose)} width={candleW} height={Math.abs(yClose - yOpen) || 2} fill={color} />
-                </g>
-              )
-            }} />
+            <Bar
+  dataKey="close"
+  fill="transparent"
+  shape={(props: any) => {
+    const { x, width, payload } = props
+    const c: Candle = payload
+
+    // Recharts sometimes calls the shape before scales exist.
+    // Try a few places where the y scale may live; bail if missing.
+    const yScale =
+      props?.yAxis?.scale ||
+      props?.yAxis?.axis?.scale ||
+      props?.yAxis?.yAxisScale ||
+      null
+    if (!yScale) return null
+
+    // Map values to pixel Y safely
+    const yOpen = yScale(c.open)
+    const yClose = yScale(c.close)
+    const yHigh = yScale(c.high)
+    const yLow = yScale(c.low)
+
+    // If any are invalid, skip drawing this candle
+    const vals = [yOpen, yClose, yHigh, yLow]
+    if (vals.some((v) => typeof v !== 'number' || !isFinite(v))) return null
+
+    const candleW = Math.max(3, Math.min(12, width * 0.6)) // cap width to prevent fat bars
+    const cx = x + width / 2 - candleW / 2
+    const color = c.close >= c.open ? '#3ddc97' : '#ff7a7a'
+
+    const wickY = Math.min(yHigh, yLow)
+    const wickH = Math.abs(yLow - yHigh) || 2
+    const bodyY = Math.min(yOpen, yClose)
+    const bodyH = Math.abs(yClose - yOpen) || 2
+
+    return (
+      <g>
+        {/* wick */}
+        <Rectangle x={x + width / 2 - 1} y={wickY} width={2} height={wickH} fill={color} />
+        {/* body */}
+        <Rectangle x={cx} y={bodyY} width={candleW} height={bodyH} fill={color} />
+      </g>
+    )
+  }}
+/>
+
           </ComposedChart>
         </ResponsiveContainer>
+)}
       </div>
 
       {/* Recent trades feed (last 8) */}
-      <div style={{fontSize:12, opacity:.9, marginTop:12}}>
+      <div style={{fontSize:12, opacity:.9, marginTop:12, maxHeight:140, overflowY:'auto'}}>
         <div><b>Last events:</b></div>
         {feed.length === 0 ? (
           <div>No trades yet.</div>
