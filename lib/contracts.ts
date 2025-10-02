@@ -17,14 +17,15 @@ export const ADDRESSES = {
   FACTORY: requireEnv("NEXT_PUBLIC_FACTORY") as `0x${string}`,
 };
 
+// Read-only instances (use your wagmi actions/connectors elsewhere for writes)
 export const registry = getContract({
   address: ADDRESSES.REGISTRY,
-  abi: (RegistryAbi as any).abi ?? RegistryAbi,
-  client: { public: publicClient },
+  abi: (RegistryAbi as any).abi ?? (RegistryAbi as any),
+  client: publicClient,
 });
 
 export const factory = getContract({
   address: ADDRESSES.FACTORY,
-  abi: (FactoryAbi as any).abi ?? FactoryAbi,
-  client: { public: publicClient },
+  abi: (FactoryAbi as any).abi ?? (FactoryAbi as any),
+  client: publicClient,
 });
