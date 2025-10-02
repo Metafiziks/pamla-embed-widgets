@@ -1,41 +1,41 @@
-// pamla-embed-widgets/lib/contracts.ts
-import { createPublicClient, http, getContract, type Address } from 'viem';
-import RegistryAbi from './abi/SongTokenRegistry.json';
-import FactoryAbi from './abi/BondingCurveFactory.json';
-import TokenAbi from './abi/BondingCurveToken.json';
-import { ADDRESSES } from './addresses';
+// lib/contracts.ts
+import { getContract } from "viem";
+import { publicClient, walletClient } from "./viem";
 
-// TODO: replace with your actual chain (chainId 11124)
-const chain = {
-  id: 11124,
-  name: 'Abstract Testnet',
-  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: [process.env.NEXT_PUBLIC_RPC_URL!] } },
-} as const;
+import RegistryAbi from "./abi/SongTokenRegistry.json";
+import FactoryAbi from "./abi/BondingCurveFactory.json";
 
-export const client = createPublicClient({
-  chain,
-  transport: http(process.env.NEXT_PUBLIC_RPC_URL),
-});
+export const ADDRESSES = {
+  REGISTRY: mustEnv("NEXT_PUBLIC_REGISTRY") as `0x${string}`,
+  FACTORY: mustEnv("NEXT_PUBLIC_FACTORY") as `0x${string}`,
+};
 
-// static instances (fixed addresses)
+// For read-only calls
 export const registry = getContract({
-  address: ADDRESSES.REGISTRY,
+  address: ADDRESSES.REGISTRY as `0x${string}`,
   abi: (RegistryAbi as any).abi ?? RegistryAbi,
-  publicClient,
+  client: { public: publicClient },
 });
 
 export const factory = getContract({
-  address: ADDRESSES.FACTORY,
+  address: ADDRESSES.FACTORY as `0x${string}`,
   abi: (FactoryAbi as any).abi ?? FactoryAbi,
-  publicClient,
+  client: { public: publicClient },
 });
 
-// per-song token (dynamic address)
-export function tokenAt(address: Address) {
-  return getContract({
-    address,
-    abi: (TokenAbi as any).abi ?? TokenAbi,
-    client,
-  });
-}
+// If you need writes (transactions), wrap with wallet client
+export const registryWrite = walletClient
+  ? getContract({
+      address: ADDRESSES.REGISTRY as `0x${string}`,
+      abi: (RegistryAbi as any).abi ?? RegistryAbi,
+      client: { wallet: walletClient },
+    })
+  : null;
+
+export const factoryWrite = walletClient
+  ? getContract({
+      address: ADDRESSES.FACTORY as `0x${string}`,
+      abi: (FactoryAbi as any).abi ?? FactoryAbi,
+      client: { wallet: walletClient },
+    })
+  : null;
