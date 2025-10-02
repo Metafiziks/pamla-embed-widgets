@@ -13,25 +13,24 @@ import TokenJson from '@/lib/abi/BondingCurveToken.json'
 const TokenABI = TokenJson.abi as Abi
 
 type Pt = { x: number; y: number }
-
 const MAX_POINTS = 200
 
-// Heuristic: names often used by bonding-curve trades
+// Names commonly used for bonding curve trade events
 const TRADE_LIKE = new Set([
   'Trade', 'Buy', 'Bought', 'TokensPurchased',
   'Sell', 'Sold', 'TokensSold',
 ])
 
-// Pull all candidate trade events from ABI
 function getTradeEventsFromAbi(abi: Abi): AbiEvent[] {
-  return (abi as any[])
-    .filter((e) => e?.type === 'event' && TRADE_LIKE.has(e.name))
-    .map((e) => e as AbiEvent)
+  return (abi as any[]).filter(e => e?.type === 'event' && TRADE_LIKE.has(e.name)) as AbiEvent[]
 }
 
 export default function TradeChart({ address }: { address: `0x${string}` }) {
   const client = useMemo(
-    () => createPublicClient({ chain: abstractSepolia, transport: http(process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz') }),
+    () => createPublicClient({
+      chain: abstractSepolia,
+      transport: http(process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'),
+    }),
     []
   )
 
@@ -47,12 +46,12 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
       setErr(null)
       setPoints([])
 
+      // --- Backfill ---
       try {
         const latest = await client.getBlockNumber()
         const span = 50_000n
         const fromBlock = latest > span ? latest - span : 0n
 
-        // Backfill: ask for all logs, then parse by ABI
         const logs = await client.getLogs({ address, fromBlock, toBlock: latest })
         const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
 
@@ -61,12 +60,12 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
           .map((l, i) => {
             const args: any = l.args || {}
             const priceAfter = args.priceAfter as bigint | undefined
-            // If priceAfter exists, use it; else estimate as ethAmount/tokenAmount
-            let y: number
-            if (typeof priceAfter === 'bigint') y = Number(priceAfter) / 1e18
-            else if (args.tokenAmount && args.ethAmount) {
-              y = Number(args.ethAmount as bigint) / Math.max(1, Number(args.tokenAmount as bigint))
-            } else y = 0
+            const y =
+              typeof priceAfter === 'bigint'
+                ? Number(priceAfter) / 1e18
+                : (args.ethAmount && args.tokenAmount)
+                ? Number(args.ethAmount as bigint) / Math.max(1, Number(args.tokenAmount as bigint))
+                : 0
             const x = Number(l.blockNumber ?? 0n) || i
             return { x, y }
           })
@@ -79,12 +78,13 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
         if (!cancelled) setErr(e?.message || 'Failed to backfill trades')
       }
 
+      // --- Live (polling mode; no RPC filters) ---
       try {
-        // Live: subscribe to ALL trade-like events discovered in the ABI
         unwatch = await client.watchContractEvent({
           address,
           abi: TokenABI,
-          eventName: events.length ? (events.map((e) => e.name) as any) : undefined, // undefined -> all events
+          // listen to *all* events, then filter by name; or narrow with:
+          // eventName: events.length ? (events.map(e => e.name) as any) : undefined,
           onLogs: (logs) => {
             const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
             const incoming: Pt[] = parsed
@@ -96,7 +96,7 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
                 const y =
                   typeof priceAfter === 'bigint'
                     ? Number(priceAfter) / 1e18
-                    : args.tokenAmount && args.ethAmount
+                    : (args.ethAmount && args.tokenAmount)
                     ? Number(args.ethAmount as bigint) / Math.max(1, Number(args.tokenAmount as bigint))
                     : 0
                 return { x, y }
@@ -104,7 +104,7 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
 
             setPoints((prev) => {
               const merged = [...prev, ...incoming].sort((a, b) => a.x - b.x)
-              // de-dup by x
+              // de-dup by block number
               const dedup: Pt[] = []
               for (const p of merged) {
                 if (!dedup.length || dedup[dedup.length - 1].x !== p.x) dedup.push(p)
@@ -114,6 +114,9 @@ export default function TradeChart({ address }: { address: `0x${string}` }) {
             })
           },
           onError: (e) => setErr(e.message),
+          // 👇 key change: use polling instead of filters
+          poll: true,
+          pollingInterval: 6_000, // 6s; adjust to taste
         })
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || 'Failed to subscribe to live trades')
