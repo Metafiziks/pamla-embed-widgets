@@ -56,18 +56,25 @@ export async function createSongTokenWrite(
   walletClient: WalletClient,
   params: { name: string; symbol: string; treasury: Address; feeBps: number | bigint }
 ) {
-  const { name, symbol, treasury } = params;
-  const feeBps = typeof params.feeBps === "bigint" ? params.feeBps : BigInt(params.feeBps);
+  if (!walletClient.account) {
+    throw new Error("Wallet client has no account (user not connected).");
+  }
 
-  // write
-  const hash = await walletClient.writeContract({
+  const feeBps =
+    typeof params.feeBps === "bigint" ? params.feeBps : BigInt(params.feeBps);
+
+  // 1) Simulate with the public client (binds the correct types/accounts/chain)
+  const { request } = await publicClient.simulateContract({
     address: REGISTRY_ADDRESS,
     abi: REGISTRY_ABI,
     functionName: "createSongToken",
-    args: [name, symbol, treasury, feeBps],
+    args: [params.name, params.symbol, params.treasury, feeBps],
+    account: walletClient.account, // important for types
   });
 
-  return hash; // tx hash
+  // 2) Write using the wallet client with the simulated request
+  const hash = await walletClient.writeContract(request);
+  return hash;
 }
 
 // If you need factory reads:
