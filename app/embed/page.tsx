@@ -201,32 +201,24 @@ function pickSellCall(abi: Abi, {
   minEthOut = 0n,
   recipient,
 }: { amountIn: bigint; minEthOut?: bigint; recipient?: `0x${string}` }) {
-  // Gather candidate sell functions from ABI
   const fns = (abi as any[]).filter(
     (e) => e?.type === 'function' && typeof e?.name === 'string' && e.name.toLowerCase().includes('sell')
   )
 
-  // Prefer common 2-arg variants: (uint256 amountIn, uint256 minEthOut)
   for (const f of fns) {
     const ins = f?.inputs || []
     const types = ins.map((i: any) => (i?.type || '').toLowerCase())
-    // 2-args: uint256,uint256
     if (types.length === 2 && types[0].startsWith('uint') && types[1].startsWith('uint')) {
       return { functionName: f.name as any, args: [amountIn, minEthOut] as const }
     }
   }
-
-  // Next: common 3-arg variants (amountIn, minEthOut, recipient) in some order
   for (const f of fns) {
     const ins = f?.inputs || []
     const types = ins.map((i: any) => (i?.type || '').toLowerCase())
     if (types.length === 3 && types.filter((t: string) => t.startsWith('uint')).length >= 2 && types.includes('address')) {
-      // Assume [amountIn, minEthOut, recipient] if recipient provided, else fallback to sender
       return { functionName: f.name as any, args: [amountIn, minEthOut, recipient] as const }
     }
   }
-
-  // Fallback: if there's a single-arg sell, try (amountIn)
   for (const f of fns) {
     const ins = f?.inputs || []
     const types = ins.map((i: any) => (i?.type || '').toLowerCase())
@@ -234,7 +226,6 @@ function pickSellCall(abi: Abi, {
       return { functionName: f.name as any, args: [amountIn] as const }
     }
   }
-
   throw new Error('No compatible sell function found in BondingCurveToken ABI')
 }
 
@@ -246,21 +237,29 @@ const doSell = async () => {
     if (phase === 0) { alert('Selling is paused right now'); return }
 
     setBusy(true)
-    const amountIn = parseEther(tokIn || '10')
 
-    // 1) Check allowance
-    console.log('[sell] allowance check', { token, owner: address, spender: curve })
+    // 0) Ensure we’re on Abstract Sepolia
+    try {
+      // @ts-ignore – some injected wallets expose this, some auto-switch
+      if (wallet?.switchChain) await (wallet as any).switchChain({ id: abstractSepolia.id })
+    } catch (e) {
+      console.warn('[sell] switchChain failed or unsupported, continuing…', e)
+    }
+
+    const amountIn = parseEther(tokIn || '10')
+    console.log('[sell] start', { token, curve, amountIn: amountIn.toString() })
+
+    // 1) Allowance
     const allowance = await pub.readContract({
       address: token,
       abi: ERC20ABI,
       functionName: 'allowance',
       args: [address as `0x${string}`, curve as `0x${string}`],
     }) as bigint
-    console.log('[sell] allowance =', allowance.toString())
+    console.log('[sell] allowance', allowance.toString())
 
-    // 2) Approve if needed
     if (allowance < amountIn) {
-      console.log('[sell] approving', amountIn.toString())
+      console.log('[sell] approving…')
       const approveHash = await wallet!.writeContract({
         account: address as `0x${string}`,
         chain: abstractSepolia,
@@ -269,31 +268,38 @@ const doSell = async () => {
         functionName: 'approve',
         args: [curve as `0x${string}`, amountIn],
       })
+      console.log('[sell] approve tx', approveHash)
       const approveRcpt = await pub.waitForTransactionReceipt({ hash: approveHash })
       if (approveRcpt.status !== 'success') throw new Error('Approve failed')
-      console.log('[sell] approve success', approveHash)
+      console.log('[sell] approve confirmed')
     }
 
-    // 3) Auto-pick the correct sell function from ABI
+    // 2) Pick sell function + simulate
     const { functionName, args } = pickSellCall(TokenABI, {
       amountIn,
       minEthOut: 0n,
-      recipient: address as `0x${string}`, // used only if ABI expects it
+      recipient: address as `0x${string}`,
     })
-    console.log('[sell] calling', functionName, args)
+    console.log('[sell] chosen fn', functionName, 'args', args)
 
-    const sellHash = await wallet!.writeContract({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
+    const sim = await pub.simulateContract({
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName,
       args: args as any,
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
     })
+    console.log('[sell] simulate ok', sim?.request)
+
+    // 3) Send using the simulated request (best gas params)
+    const sellHash = await wallet!.writeContract(sim.request)
+    console.log('[sell] tx', sellHash)
     const sellRcpt = await pub.waitForTransactionReceipt({ hash: sellHash })
+    console.log('[sell] receipt', sellRcpt.status)
     if (sellRcpt.status === 'success') alert(`Sell confirmed: ${sellHash}`)
     else alert(`Transaction mined but not successful: ${sellHash}`)
-  } catch (e:any) {
+  } catch (e: any) {
     console.error('[sell] error', e)
     alert(e?.shortMessage || e?.message || 'Sell failed')
   } finally {

@@ -250,7 +250,7 @@ export default function TradeChart({
   return (
     <div style={{ position:'relative' }}>
       {/* Left controls: interval & range */}
-      <div style={{ position:'absolute', left:8, top:8, display:'flex', gap:8, flexWrap:'wrap' }}>
+      <div style={{ position:'absolute', left:8, top:8, display:'flex', gap:8, flexWrap:'wrap', zIndex: 2 }}>
         <div>
           {INTERVALS.map(i => (
             <button
@@ -286,7 +286,7 @@ export default function TradeChart({
       </div>
 
       {/* Right badge: symbol + last + Δ over selected range */}
-      <div style={{ position:'absolute', right:8, top:8, display:'flex', gap:8, alignItems:'center' }}>
+      <div style={{ position:'absolute', right:8, top:8, display:'flex', gap:8, alignItems:'center', zIndex: 2 }}>
         <span style={{ padding:'4px 8px', border:'1px solid #2a2a2a', borderRadius:9999, background:'#151515', fontSize:12 }}>
           {symbol}
         </span>
@@ -306,7 +306,7 @@ export default function TradeChart({
       </div>
 
       {/* Candles */}
-      <div style={{ width:'100%', height:300, marginTop:36, overflow:'hidden' }}>
+      <div style={{ width:'100%', height:300, marginTop:36, overflow:'hidden', zIndex: 1 }}>
         {data.length === 0 ? (
           <div style={{opacity:.7, padding:'8px 0'}}>No trades yet in this range.</div>
         ) : (
