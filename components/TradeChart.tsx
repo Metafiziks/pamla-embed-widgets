@@ -64,7 +64,8 @@ export default function TradeChart({
   const [feed, setFeed] = useState<Trade[]>([])
   const [err, setErr] = useState<string | null>(null)
 
-  const timerRef = useRef<NodeJS.Timeout | null>(null)
+  // ✅ Cross-platform timeout type
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastBlockRef = useRef<bigint | null>(null)
 
   function limitToWindow(list: Trade[], windowMs: number) {
@@ -102,7 +103,13 @@ export default function TradeChart({
         // If your ABI has a Trade-like event, this will pick it up.
         // Otherwise, this remains empty and you’ll only see “No trades yet”.
         const txs: Trade[] = parsed
-          .filter((l: any) => l.eventName === 'Trade' || l.eventName === 'Traded' || l.eventName === 'Buy' || l.eventName === 'Sell')
+          .filter(
+            (l: any) =>
+              l.eventName === 'Trade' ||
+              l.eventName === 'Traded' ||
+              l.eventName === 'Buy' ||
+              l.eventName === 'Sell'
+          )
           .map((l: any) => ({
             ts: Number(l.args?.timestamp ?? (l.blockTimestamp ? Number(l.blockTimestamp) * 1000 : Date.now())),
             price: Number(l.args?.price ?? 0),
