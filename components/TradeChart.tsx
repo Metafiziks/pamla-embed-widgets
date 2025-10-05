@@ -7,11 +7,8 @@ import { ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar } 
 import TokenAbiJson from '@/lib/abi/BondingCurveToken.json'
 import { publicClient } from '@/lib/viem'
 
-// Normalize ABI whether the JSON has { abi: [...] } or is already the array
 const TOKEN_ABI = (TokenAbiJson as any).abi ?? (TokenAbiJson as any)
 
-// ---- Controls ----
-// We keep one control: the time RANGE (includes "All")
 const RANGES = [
   { key: '1m', ms: 60 * 1000, label: '1m' },
   { key: '5m', ms: 5 * 60 * 1000, label: '5m' },
@@ -22,15 +19,12 @@ const RANGES = [
 
 type RangeKey = (typeof RANGES)[number]['key']
 
-// Fixed candle interval (5m) so we don’t show duplicate controls
 const FIXED_INTERVAL_MS = 5 * 60 * 1000
-
-// Poll period
 const POLL_MS = 30_000
 
 interface TradeLike {
   ts: number
-  price?: number | null // optional (can be missing in fallback)
+  price?: number | null
   amount: number
 }
 
@@ -70,23 +64,18 @@ export default function TradeChart({
 
     const run = async () => {
       setErr(null)
-
       try {
         const latest = await publicClient.getBlockNumber()
-        // widen span for "all" so we have history; adjust to your chain’s block cadence
         const span = range === 'all' ? 250_000n : 80_000n
         const fromBlock = latest > span ? latest - span : 0n
 
-        // 1) Try to parse on-chain Trade-like events if ABI has them
         const logs = await publicClient.getLogs({ address, fromBlock, toBlock: latest })
         const parsed = parseEventLogs({ abi: TOKEN_ABI, logs, strict: false })
 
         let txs: TradeLike[] = (parsed as Log[])
-          // keep any event that carries both price & amount
           .filter((l: any) => l.args && (l.args.price !== undefined || l.args.amount !== undefined))
           .map((l: any) => ({
             ts: Number(l.args?.timestamp ?? (l.blockTimestamp ?? Date.now())),
-            // Some ABIs may name these differently; try common names:
             price:
               l.args?.price !== undefined
                 ? Number(l.args.price)
@@ -103,22 +92,31 @@ export default function TradeChart({
           .filter(t => t.amount > 0)
           .sort((a, b) => a.ts - b.ts)
 
-        // 2) Fallback: if we didn’t find any, derive basic volume bars from ERC20 Transfer logs
+        // fallback if no trade events
         if (txs.length === 0) {
-          const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
-          const xferLogs = await publicClient.getLogs({
+          const transferSelector =
+            '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' // Transfer(address,address,uint256)
+
+          const transferLogs = await publicClient.getLogs({
             address,
-            topics: [transferTopic],
+            // older viem doesn't support `topics:` param; emulate via `event`
+            event: {
+              type: 'event',
+              name: 'Transfer',
+              inputs: [
+                { indexed: true, name: 'from', type: 'address' },
+                { indexed: true, name: 'to', type: 'address' },
+                { indexed: false, name: 'value', type: 'uint256' },
+              ],
+            } as any,
             fromBlock,
             toBlock: latest,
           })
 
-          // cap to the most recent N to avoid excessive block lookups
-          const recent = xferLogs.slice(-250)
+          const recent = transferLogs.slice(-250)
 
-          // Map to { ts, amount }, fetch timestamps per block
           const withTs = await Promise.all(
-            recent.map(async (l) => {
+            recent.map(async (l: any) => {
               let ts = Date.now()
               try {
                 if (l.blockHash) {
@@ -126,9 +124,8 @@ export default function TradeChart({
                   ts = Number(blk.timestamp) * 1000
                 }
               } catch {
-                // ignore timestamp errors
+                // ignore
               }
-              // l.data is the value (uint256) for Transfer
               const amount = Number(BigInt(l.data as `0x${string}`)) / 1e18
               return { ts, amount }
             })
@@ -136,7 +133,7 @@ export default function TradeChart({
 
           txs = withTs
             .filter(t => t.amount > 0)
-            .map(t => ({ ...t, price: null })) // no price info in fallback
+            .map(t => ({ ...t, price: null }))
             .sort((a, b) => a.ts - b.ts)
         }
 
@@ -146,9 +143,7 @@ export default function TradeChart({
         if (!cancelled) setErr(e?.message || 'Failed to load trades')
       }
 
-      if (!cancelled) {
-        timerRef.current = setTimeout(run, POLL_MS)
-      }
+      if (!cancelled) timerRef.current = setTimeout(run, POLL_MS)
     }
 
     run()
@@ -158,16 +153,12 @@ export default function TradeChart({
     }
   }, [address, range, rangeMs])
 
-  // Candle aggregation on fixed 5m interval
   const candles: Candle[] = useMemo(() => {
     if (trades.length === 0) return []
     const grouped: Record<number, Candle> = {}
     for (const t of trades) {
       const bucket = Math.floor(t.ts / FIXED_INTERVAL_MS) * FIXED_INTERVAL_MS
-      if (!grouped[bucket]) {
-        grouped[bucket] = { ts: bucket, price: null, volume: 0 }
-      }
-      // Use last seen price in bucket if we have one; price may be null in fallback
+      if (!grouped[bucket]) grouped[bucket] = { ts: bucket, price: null, volume: 0 }
       if (typeof t.price === 'number') grouped[bucket].price = t.price
       grouped[bucket].volume += t.amount
     }
@@ -188,7 +179,6 @@ export default function TradeChart({
 
   return (
     <div className="trade-chart-wrap" style={{ paddingTop: 12 }}>
-      {/* Range controls (single row, includes All) */}
       <div
         className="chart-controls"
         style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}
@@ -211,24 +201,9 @@ export default function TradeChart({
         ))}
       </div>
 
-      <div
-        style={{
-          width: '100%',
-          height: 300,
-          marginTop: 44,
-          paddingTop: 8,
-          overflow: 'hidden',
-          zIndex: 1,
-        }}
-      >
+      <div style={{ width: '100%', height: 300, marginTop: 44, paddingTop: 8 }}>
         {data.length === 0 ? (
-          <div
-            style={{
-              opacity: 0.7,
-              padding: '8px 0',
-              textAlign: 'center',
-            }}
-          >
+          <div style={{ opacity: 0.7, padding: '8px 0', textAlign: 'center' }}>
             No trades yet in this range.
           </div>
         ) : (
@@ -260,7 +235,8 @@ export default function TradeChart({
 
       {!hasPrice && data.length > 0 && (
         <div style={{ color: '#999', marginTop: 6, fontSize: 12, textAlign: 'center' }}>
-          Showing volume from ERC-20 transfers. Price line will appear when on-chain Trade events are present.
+          Showing volume from ERC-20 transfers. Price line will appear when on-chain Trade events
+          are present.
         </div>
       )}
     </div>
