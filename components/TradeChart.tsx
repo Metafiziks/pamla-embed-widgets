@@ -10,64 +10,54 @@ import { publicClient } from '@/lib/viem'
 // Normalize ABI whether the JSON has { abi: [...] } or is already the array
 const TOKEN_ABI = (TokenAbiJson as any).abi ?? (TokenAbiJson as any)
 
-const INTERVALS = [
-  { key: '1m', ms: 60 * 1000, label: '1m' },
-  { key: '5m', ms: 5 * 60 * 1000, label: '5m' },
-  { key: '1h', ms: 60 * 60 * 1000, label: '1h' },
-  { key: '24h', ms: 24 * 60 * 60 * 1000, label: '24h' },
-]
-
+// ---- Controls ----
+// We keep one control: the time RANGE (includes "All")
 const RANGES = [
   { key: '1m', ms: 60 * 1000, label: '1m' },
   { key: '5m', ms: 5 * 60 * 1000, label: '5m' },
   { key: '1h', ms: 60 * 60 * 1000, label: '1h' },
   { key: '24h', ms: 24 * 60 * 60 * 1000, label: '24h' },
   { key: 'all', ms: Infinity, label: 'All' },
-]
+] as const
 
-type IntervalKey = (typeof INTERVALS)[number]['key']
 type RangeKey = (typeof RANGES)[number]['key']
 
-interface Trade {
+// Fixed candle interval (5m) so we don’t show duplicate controls
+const FIXED_INTERVAL_MS = 5 * 60 * 1000
+
+// Poll period
+const POLL_MS = 30_000
+
+interface TradeLike {
   ts: number
-  price: number
+  price?: number | null // optional (can be missing in fallback)
   amount: number
 }
 
 interface Candle {
   ts: number
-  price: number
+  price: number | null
   volume: number
 }
-
-const POLL_MS = 30_000
 
 export default function TradeChart({
   address,
   symbol = '$PAMLA',
-  defaultInterval = '1m',
   defaultRange = 'all',
 }: {
   address: `0x${string}`
   symbol?: string
-  defaultInterval?: IntervalKey
   defaultRange?: RangeKey
 }) {
-  const client = publicClient
-
-  const [interval, setInterval] = useState<IntervalKey>(defaultInterval)
   const [range, setRange] = useState<RangeKey>(defaultRange)
-  const intervalMs = INTERVALS.find(i => i.key === interval)!.ms
   const rangeMs = RANGES.find(r => r.key === range)!.ms
 
-  const [trades, setTrades] = useState<Trade[]>([])
-  const [feed, setFeed] = useState<Trade[]>([])
+  const [trades, setTrades] = useState<TradeLike[]>([])
   const [err, setErr] = useState<string | null>(null)
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const lastBlockRef = useRef<bigint | null>(null)
 
-  function limitToWindow(list: Trade[], windowMs: number) {
+  function limitToWindow(list: TradeLike[], windowMs: number) {
     if (windowMs === Infinity) return list
     const cutoff = Date.now() - windowMs
     let i = list.findIndex(t => t.ts >= cutoff)
@@ -80,9 +70,6 @@ export default function TradeChart({
 
     const run = async () => {
       setErr(null)
-      setTrades([])
-      setFeed([])
-      lastBlockRef.current = null
 
       try {
         const latest = await publicClient.getBlockNumber()
@@ -90,26 +77,73 @@ export default function TradeChart({
         const span = range === 'all' ? 250_000n : 80_000n
         const fromBlock = latest > span ? latest - span : 0n
 
-        // Pull all logs then extract Trade events
+        // 1) Try to parse on-chain Trade-like events if ABI has them
         const logs = await publicClient.getLogs({ address, fromBlock, toBlock: latest })
         const parsed = parseEventLogs({ abi: TOKEN_ABI, logs, strict: false })
 
-        const txs: Trade[] = (parsed as Log[])
-          .filter((l: any) => l.eventName === 'Trade')
+        let txs: TradeLike[] = (parsed as Log[])
+          // keep any event that carries both price & amount
+          .filter((l: any) => l.args && (l.args.price !== undefined || l.args.amount !== undefined))
           .map((l: any) => ({
-            ts: Number(l.args?.timestamp ?? Date.now()),
-            price: Number(l.args?.price ?? 0),
-            amount: Number(l.args?.amount ?? 0),
+            ts: Number(l.args?.timestamp ?? (l.blockTimestamp ?? Date.now())),
+            // Some ABIs may name these differently; try common names:
+            price:
+              l.args?.price !== undefined
+                ? Number(l.args.price)
+                : l.args?.ethPerToken !== undefined
+                ? Number(l.args.ethPerToken)
+                : null,
+            amount:
+              l.args?.amount !== undefined
+                ? Number(l.args.amount)
+                : l.args?.tokens !== undefined
+                ? Number(l.args.tokens)
+                : 0,
           }))
+          .filter(t => t.amount > 0)
           .sort((a, b) => a.ts - b.ts)
+
+        // 2) Fallback: if we didn’t find any, derive basic volume bars from ERC20 Transfer logs
+        if (txs.length === 0) {
+          const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+          const xferLogs = await publicClient.getLogs({
+            address,
+            topics: [transferTopic],
+            fromBlock,
+            toBlock: latest,
+          })
+
+          // cap to the most recent N to avoid excessive block lookups
+          const recent = xferLogs.slice(-250)
+
+          // Map to { ts, amount }, fetch timestamps per block
+          const withTs = await Promise.all(
+            recent.map(async (l) => {
+              let ts = Date.now()
+              try {
+                if (l.blockHash) {
+                  const blk = await publicClient.getBlock({ blockHash: l.blockHash })
+                  ts = Number(blk.timestamp) * 1000
+                }
+              } catch {
+                // ignore timestamp errors
+              }
+              // l.data is the value (uint256) for Transfer
+              const amount = Number(BigInt(l.data as `0x${string}`)) / 1e18
+              return { ts, amount }
+            })
+          )
+
+          txs = withTs
+            .filter(t => t.amount > 0)
+            .map(t => ({ ...t, price: null })) // no price info in fallback
+            .sort((a, b) => a.ts - b.ts)
+        }
 
         const windowed = range === 'all' ? txs : limitToWindow(txs, rangeMs)
         setTrades(windowed)
-        setFeed(windowed.slice(-8))
-        lastBlockRef.current = latest
-        console.debug('[chart] backfill trades=', windowed.length)
       } catch (e: any) {
-        if (!cancelled) setErr(e?.message || 'Failed to backfill trades')
+        if (!cancelled) setErr(e?.message || 'Failed to load trades')
       }
 
       if (!cancelled) {
@@ -122,58 +156,43 @@ export default function TradeChart({
       cancelled = true
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [address, client, range, rangeMs])
+  }, [address, range, rangeMs])
 
+  // Candle aggregation on fixed 5m interval
   const candles: Candle[] = useMemo(() => {
     if (trades.length === 0) return []
     const grouped: Record<number, Candle> = {}
     for (const t of trades) {
-      const bucket = Math.floor(t.ts / intervalMs) * intervalMs
+      const bucket = Math.floor(t.ts / FIXED_INTERVAL_MS) * FIXED_INTERVAL_MS
       if (!grouped[bucket]) {
-        grouped[bucket] = { ts: bucket, price: t.price, volume: 0 }
+        grouped[bucket] = { ts: bucket, price: null, volume: 0 }
       }
-      grouped[bucket].price = t.price
+      // Use last seen price in bucket if we have one; price may be null in fallback
+      if (typeof t.price === 'number') grouped[bucket].price = t.price
       grouped[bucket].volume += t.amount
     }
     return Object.values(grouped).sort((a, b) => a.ts - b.ts)
-  }, [trades, intervalMs])
+  }, [trades])
 
   const data = useMemo(
-    () => candles.map(c => ({ time: new Date(c.ts).toLocaleTimeString(), ...c })),
+    () =>
+      candles.map(c => ({
+        time: new Date(c.ts).toLocaleTimeString(),
+        price: c.price,
+        volume: c.volume,
+      })),
     [candles]
   )
 
-  if (!publicClient || !address) {
-    console.error('[TradeChart] missing publicClient or address', { publicClient, address })
-    return (
-      <div style={{ color: 'tomato', padding: 16 }}>
-        ⚠ Chart not initialized (missing client or address)
-      </div>
-    )
-  }
+  const hasPrice = data.some(d => typeof d.price === 'number' && !Number.isNaN(d.price))
 
   return (
     <div className="trade-chart-wrap" style={{ paddingTop: 12 }}>
+      {/* Range controls (single row, includes All) */}
       <div
         className="chart-controls"
         style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}
       >
-        {INTERVALS.map(i => (
-          <button
-            key={i.key}
-            onClick={() => setInterval(i.key)}
-            style={{
-              background: interval === i.key ? '#333' : '#1a1a1a',
-              color: '#fff',
-              borderRadius: 4,
-              padding: '4px 8px',
-              border: '1px solid #444',
-              cursor: 'pointer',
-            }}
-          >
-            {i.label}
-          </button>
-        ))}
         {RANGES.map(r => (
           <button
             key={r.key}
@@ -219,13 +238,15 @@ export default function TradeChart({
               <YAxis hide />
               <Tooltip />
               <Bar dataKey="volume" barSize={2} fill="#333" />
-              <Line
-                type="monotone"
-                dataKey="price"
-                stroke="#00ffb3"
-                dot={false}
-                strokeWidth={2}
-              />
+              {hasPrice && (
+                <Line
+                  type="monotone"
+                  dataKey="price"
+                  stroke="#00ffb3"
+                  dot={false}
+                  strokeWidth={2}
+                />
+              )}
             </ComposedChart>
           </ResponsiveContainer>
         )}
@@ -234,6 +255,12 @@ export default function TradeChart({
       {err && (
         <div style={{ color: 'tomato', marginTop: 6, fontSize: 12, textAlign: 'center' }}>
           ⚠ {err}
+        </div>
+      )}
+
+      {!hasPrice && data.length > 0 && (
+        <div style={{ color: '#999', marginTop: 6, fontSize: 12, textAlign: 'center' }}>
+          Showing volume from ERC-20 transfers. Price line will appear when on-chain Trade events are present.
         </div>
       )}
     </div>
