@@ -354,11 +354,13 @@ const doSell = async () => {
           {isConnected && (
             <>
               <span style={{opacity:.8}}>Connected: {address?.slice(0,6)}…{address?.slice(-4)}</span>
-              {allowlisted !== null && (
-                <span className="badge" style={{background: allowlisted ? '#113a1a' : '#3a1111', borderColor: allowlisted ? '#1f8a36' : '#8a1f1f'}}>
-                  {allowlisted ? '✅ WHITELISTED' : '❌ NOT WHITELISTED'}
-                </span>
-              )}
+              {(phase === 1 || phase === 2) && allowlisted !== null && (
+  <span className="badge">
+    {phase === 1
+      ? (allowlisted ? '✅ PaMs HOLDER' : '❌ NOT PaMs HOLDER')
+      : (allowlisted ? '✅ WHITELISTED' : '❌ NOT WHITELISTED')}
+  </span>
+)}
               {pamsCount !== null && (
                 <span className="badge">{`PaMs: ${pamsCount.toString()}`}</span>
               )}
