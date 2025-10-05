@@ -1,19 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  createPublicClient,
-  http,
-  parseEventLogs,
-  type Log,
-  type Address,
-} from 'viem'
-import { abstractSepolia } from 'viem/chains'
+import { parseEventLogs, type Log, type Address } from 'viem'
 import { ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar } from 'recharts'
 
 import { TokenABI } from '@/lib/abi/BondingCurveToken'
-
-const RPC = process.env.NEXT_PUBLIC_RPC_URL as string
+import { publicClient } from '@/lib/viem'  // ✅ use shared viem client
 
 const INTERVALS = [
   { key: '1m', ms: 60 * 1000, label: '1m' },
@@ -93,11 +85,11 @@ export default function TradeChart({
       lastBlockRef.current = null
 
       try {
-        const latest = await client.getBlockNumber()
+        const latest = await publiClient.getBlockNumber()
         const span = range === 'all' ? 250_000n : 80_000n
         const fromBlock = latest > span ? latest - span : 0n
 
-        const logs = await client.getLogs({ address, fromBlock, toBlock: latest })
+        const logs = await publicClient.getLogs({ address, fromBlock, toBlock: latest })
         const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
         const txs: Trade[] = parsed
           .filter(l => l.eventName === 'Trade')
