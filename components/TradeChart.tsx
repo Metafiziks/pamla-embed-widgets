@@ -4,8 +4,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseEventLogs, type Log, type Address } from 'viem'
 import { ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar } from 'recharts'
 
-import { TokenABI } from '@/lib/abi/BondingCurveToken'
-import { publicClient } from '@/lib/viem'  // ✅ use shared viem client
+import TokenAbiJson from '@/lib/abi/BondingCurveToken.json'
+import { publicClient } from '@/lib/viem'
+
+// Normalize ABI whether the JSON has { abi: [...] } or is already the array
+const TOKEN_ABI = (TokenAbiJson as any).abi ?? (TokenAbiJson as any)
 
 const INTERVALS = [
   { key: '1m', ms: 60 * 1000, label: '1m' },
@@ -90,7 +93,7 @@ export default function TradeChart({
         const fromBlock = latest > span ? latest - span : 0n
 
         const logs = await publicClient.getLogs({ address, fromBlock, toBlock: latest })
-        const parsed = parseEventLogs({ abi: TokenABI, logs, strict: false })
+        const parsed = parseEventLogs({ abi: TOKEN_ABI, logs, strict: false })
         const txs: Trade[] = parsed
           .filter(l => l.eventName === 'Trade')
           .map((l: any) => ({
