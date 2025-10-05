@@ -15,7 +15,7 @@ const INTERVALS = [
   { key: '5m', ms: 5 * 60 * 1000, label: '5m' },
   { key: '1h', ms: 60 * 60 * 1000, label: '1h' },
   { key: '24h', ms: 24 * 60 * 60 * 1000, label: '24h' },
-]
+] as const
 
 const RANGES = [
   { key: '1m', ms: 60 * 1000, label: '1m' },
@@ -23,7 +23,7 @@ const RANGES = [
   { key: '1h', ms: 60 * 60 * 1000, label: '1h' },
   { key: '24h', ms: 24 * 60 * 60 * 1000, label: '24h' },
   { key: 'all', ms: Infinity, label: 'All' },
-]
+] as const
 
 type IntervalKey = (typeof INTERVALS)[number]['key']
 type RangeKey = (typeof RANGES)[number]['key']
@@ -53,10 +53,7 @@ export default function TradeChart({
   defaultInterval?: IntervalKey
   defaultRange?: RangeKey
 }) {
-  const client = useMemo(
-    () => createPublicClient({ chain: abstractSepolia, transport: http(RPC) }),
-    []
-  )
+  const client = publicClient
 
   const [interval, setInterval] = useState<IntervalKey>(defaultInterval)
   const [range, setRange] = useState<RangeKey>(defaultRange)
@@ -88,25 +85,36 @@ export default function TradeChart({
       lastBlockRef.current = null
 
       try {
-        const latest = await publiClient.getBlockNumber()
+        const latest = await publicClient.getBlockNumber()
+        // pull a reasonably big window of blocks; 'all' just means "larger window", not infinite
         const span = range === 'all' ? 250_000n : 80_000n
         const fromBlock = latest > span ? latest - span : 0n
 
-        const logs = await publicClient.getLogs({ address, fromBlock, toBlock: latest })
+        // grab logs first (no event filter; we’ll parse with ABI right after)
+        const logs = await publicClient.getLogs({
+          address: address as Address,
+          fromBlock,
+          toBlock: latest,
+        })
+
         const parsed = parseEventLogs({ abi: TOKEN_ABI, logs, strict: false })
+
+        // If your ABI has a Trade-like event, this will pick it up.
+        // Otherwise, this remains empty and you’ll only see “No trades yet”.
         const txs: Trade[] = parsed
-          .filter(l => l.eventName === 'Trade')
+          .filter((l: any) => l.eventName === 'Trade' || l.eventName === 'Traded' || l.eventName === 'Buy' || l.eventName === 'Sell')
           .map((l: any) => ({
-            ts: Number(l.args.timestamp ?? Date.now()),
-            price: Number(l.args.price ?? 0),
-            amount: Number(l.args.amount ?? 0),
+            ts: Number(l.args?.timestamp ?? (l.blockTimestamp ? Number(l.blockTimestamp) * 1000 : Date.now())),
+            price: Number(l.args?.price ?? 0),
+            amount: Number(l.args?.amount ?? l.args?.tokensOut ?? 0),
           }))
-          .sort((a, b) => a.ts - b.ts)
+          .sort((a: any, b: any) => a.ts - b.ts)
 
         const windowed = range === 'all' ? txs : limitToWindow(txs, rangeMs)
         setTrades(windowed)
         setFeed(windowed.slice(-8))
         lastBlockRef.current = latest
+        // eslint-disable-next-line no-console
         console.debug('[chart] backfill trades=', windowed.length)
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || 'Failed to backfill trades')
@@ -122,7 +130,7 @@ export default function TradeChart({
       cancelled = true
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [address, client, range, rangeMs])
+  }, [address, range, rangeMs])
 
   const candles: Candle[] = useMemo(() => {
     if (trades.length === 0) return []
