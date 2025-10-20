@@ -192,9 +192,12 @@ const doBuy = async () => {
     }
   }
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  //const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const EMBED_HOST =
+  process.env.NEXT_PUBLIC_EMBED_HOST ?? (typeof window !== 'undefined' ? window.location.origin : '')
+
   const iframeCode = `<iframe
-  src="${origin}/embed?curve=${curve || ''}&chain=${chain}"
+  src="${EMBED_HOST}/embed?curve=${curve || ''}&chain=${chain}"
   width="100%" height="950" style="border:0;background:transparent" loading="lazy"></iframe>`
 
   if (!curve) {
