@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Address } from 'viem'
-import { parseAbiItem, createPublicClient, http } from 'viem'
+import type { Address, Log } from 'viem'
+import { parseEventLogs } from 'viem'
 import {
   ComposedChart,
   Line,
@@ -14,19 +14,22 @@ import {
 } from 'recharts'
 
 import TokenAbiJson from '@/lib/abi/BondingCurveToken.json'
-import { abstractSepolia } from '@/lib/wagmi'
+import { publicClient } from '@/lib/viem'
 
-// ---------- Config ----------
-const ABS_RPC =
-  process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'
+// Normalize ABI whether file exports { abi: [...] } or already the array
+const TOKEN_ABI = (TokenAbiJson as any).abi ?? (TokenAbiJson as any)
 
-// poll fast enough to feel live but not spammy
-const POLL_MS = 8_000
+// Minimal ERC-20 Transfer event for decoding + direction inference
+const TRANSFER_EVENT = {
+  type: 'event',
+  name: 'Transfer',
+  inputs: [
+    { indexed: true, name: 'from', type: 'address' },
+    { indexed: true, name: 'to', type: 'address' },
+    { indexed: false, name: 'value', type: 'uint256' },
+  ],
+} as const
 
-// fixed candle width (5m)
-const FIXED_INTERVAL_MS = 5 * 60 * 1000
-
-// time ranges
 const RANGES = [
   { key: '1m', ms: 60 * 1000, label: '1m' },
   { key: '5m', ms: 5 * 60 * 1000, label: '5m' },
@@ -36,23 +39,9 @@ const RANGES = [
 ] as const
 type RangeKey = (typeof RANGES)[number]['key']
 
-// normalize ABI whether file is { abi:[...] } or the array
-const TOKEN_ABI = (TokenAbiJson as any).abi ?? (TokenAbiJson as any)
+const FIXED_INTERVAL_MS = 5 * 60 * 1000
+const POLL_MS = 30_000
 
-// Minimal ERC-20 Transfer for fallback inference
-const TRANSFER_EVENT = parseAbiItem(
-  'event Transfer(address indexed from,address indexed to,uint256 value)'
-)
-
-// Native events from your curve/token (adjust names/args if you rename later)
-const BUY_EVT = parseAbiItem(
-  'event Buy(address buyer,uint256 ethIn,uint256 tokensOut)'
-)
-const SELL_EVT = parseAbiItem(
-  'event Sell(address seller,uint256 amountIn,uint256 ethOut)'
-)
-
-// ---------- Types ----------
 type Side = 'buy' | 'sell' | 'transfer'
 
 interface TradeLike {
@@ -69,13 +58,11 @@ interface Candle {
   sellVol: number
 }
 
-// ---------- Utils ----------
 function formatTime(ts: number) {
   const d = new Date(ts)
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-// ---------- Component ----------
 export default function TradeChart({
   address,
   symbol = '$PAMLA',
@@ -86,23 +73,17 @@ export default function TradeChart({
   defaultRange?: RangeKey
 }) {
   const [range, setRange] = useState<RangeKey>(defaultRange)
-  const rangeMs = RANGES.find(r => r.key === range)!.ms
+  const rangeMs = RANGES.find((r) => r.key === range)!.ms
 
   const [trades, setTrades] = useState<TradeLike[]>([])
   const [feed, setFeed] = useState<TradeLike[]>([])
   const [err, setErr] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // dedicated public client (stable RPC)
-  const pub = useMemo(
-    () => createPublicClient({ chain: abstractSepolia, transport: http(ABS_RPC) }),
-    []
-  )
-
   function limitToWindow(list: TradeLike[], windowMs: number) {
     if (windowMs === Infinity) return list
     const cutoff = Date.now() - windowMs
-    let i = list.findIndex(t => t.ts >= cutoff)
+    let i = list.findIndex((t) => t.ts >= cutoff)
     if (i === -1) i = Math.max(0, list.length - 5000)
     return list.slice(i)
   }
@@ -113,84 +94,97 @@ export default function TradeChart({
     const run = async () => {
       setErr(null)
       try {
-        const latest = await pub.getBlockNumber()
-
-        // Keep block windows tight. Widen only for "all".
-        // Abstract blocks are fast; 12k blocks ≈ short recent history.
-        const span = range === 'all' ? 60_000n : 12_000n
+        const latest = await publicClient.getBlockNumber()
+        // keep this bounded for speed; widen when 'all' is selected
+        const span = range === 'all' ? 250_000n : 80_000n
         const fromBlock = latest > span ? latest - span : 0n
 
-        // 1) Prefer native Buy/Sell events for true direction
-        const logs = await pub.getLogs({
-          address,
-          fromBlock,
-          toBlock: latest,
-          events: [BUY_EVT, SELL_EVT],
-        })
+        // Try to parse any explicit Buy/Sell events first (if present in your ABI)
+        const logs = await publicClient.getLogs({ address, fromBlock, toBlock: latest })
 
-        // cache block timestamps by number to avoid N calls
-        const uniqBlocks = Array.from(
-          new Set(logs.map(l => l.blockNumber!).filter(Boolean))
-        )
+        // build a quick blockNumber -> timestamp map to avoid many RPC calls
+        const uniqBlockNums = Array.from(new Set(logs.map((l) => l.blockNumber!).filter(Boolean)))
         const blockMap = new Map<bigint, number>()
         await Promise.all(
-          uniqBlocks.map(async (bn) => {
-            const b = await pub.getBlock({ blockNumber: bn })
-            blockMap.set(bn, Number(b.timestamp) * 1000)
+          uniqBlockNums.slice(-400).map(async (bn) => {
+            try {
+              const blk = await publicClient.getBlock({ blockNumber: bn })
+              blockMap.set(bn, Number(blk.timestamp) * 1000)
+            } catch {
+              /* ignore */
+            }
           })
         )
 
-        let txs: TradeLike[] = (logs as any[]).map((l: any) => {
-  const isBuy = l.eventName === 'Buy'
-  const ts = blockMap.get(l.blockNumber!) ?? Date.now()
-  const amount =
-    Number(isBuy ? l.args.tokensOut : l.args.amountIn) / 1e18
+        // Allow strict:false so unknown events are ignored
+        const parsed = parseEventLogs({ abi: TOKEN_ABI, logs, strict: false })
 
-  const side: Side = isBuy ? 'buy' : 'sell' // <- force literal type
-  return { ts, amount, price: null, side }
-})
-.filter(t => t.amount > 0)
-.sort((a, b) => a.ts - b.ts)
+        // Known event names in your contract (adjust if you rename)
+        const buyNames = new Set(['Buy', 'TokensPurchased'])
+        const sellNames = new Set(['Sell', 'TokensSold'])
 
+        let txs: TradeLike[] = (parsed as any[])
+          .filter((l) => buyNames.has(l.eventName) || sellNames.has(l.eventName))
+          .map<TradeLike>((l) => {
+            const isBuy = buyNames.has(l.eventName)
+            const ts = blockMap.get(l.blockNumber!) ?? Date.now()
+            const rawAmount =
+              l.args?.amount ??
+              l.args?.tokens ??
+              l.args?.value ??
+              0n
+            const amount = Number(rawAmount) / 1e18
+            const price =
+              l.args?.price !== undefined
+                ? Number(l.args.price)
+                : l.args?.ethPerToken !== undefined
+                ? Number(l.args.ethPerToken)
+                : null
+            const side: Side = isBuy ? 'buy' : 'sell'
+            return { ts, amount, price, side }
+          })
+          .filter((t) => t.amount > 0)
+          .sort((a, b) => a.ts - b.ts)
 
-        // 2) Fallback: if no native trades (early blocks), infer from ERC-20 Transfer
+        // If no explicit Buy/Sell events, infer direction from ERC20 Transfer mint/burn
         if (txs.length === 0) {
-          const tLogs = await pub.getLogs({
+          const transferLogs = await publicClient.getLogs({
             address,
+            event: TRANSFER_EVENT as any,
             fromBlock,
             toBlock: latest,
-            event: TRANSFER_EVENT,
           })
 
-          // Avoid hammering timestamps; reuse cache by blockNumber
-          const uniqTBlocks = Array.from(
-            new Set(tLogs.map(l => l.blockNumber!).filter(Boolean))
-          )
-          await Promise.all(
-            uniqTBlocks.map(async (bn) => {
-              if (!blockMap.has(bn)) {
-                const b = await pub.getBlock({ blockNumber: bn })
-                blockMap.set(bn, Number(b.timestamp) * 1000)
+          const zero = '0x0000000000000000000000000000000000000000'
+          const recent = transferLogs.slice(-300)
+
+          const withTs: TradeLike[] = await Promise.all(
+            recent.map(async (l: any) => {
+              let ts = Date.now()
+              try {
+                if (l.blockNumber && blockMap.has(l.blockNumber)) {
+                  ts = blockMap.get(l.blockNumber)!
+                } else if (l.blockHash) {
+                  const blk = await publicClient.getBlock({ blockHash: l.blockHash })
+                  ts = Number(blk.timestamp) * 1000
+                }
+              } catch {
+                /* ignore */
               }
+              const from = (l.args?.from as Address | undefined)?.toLowerCase()
+              const to = (l.args?.to as Address | undefined)?.toLowerCase()
+              const amount = Number(l.args?.value ?? 0n) / 1e18
+
+              let side: Side = 'transfer'
+              if (from === zero) side = 'buy' // mint
+              else if (to === zero) side = 'sell' // burn
+
+              return { ts, amount, price: null, side }
             })
           )
 
-          const zero = '0x0000000000000000000000000000000000000000'
-          txs = tLogs.slice(-300).map((l: any) => {
-  const ts = blockMap.get(l.blockNumber!) ?? Date.now()
-  const from = (l.args?.from as Address | undefined)?.toLowerCase()
-  const to = (l.args?.to as Address | undefined)?.toLowerCase()
-  const amount = Number(l.args?.value ?? 0n) / 1e18
-
-  let side: Side = 'transfer'
-  if (from === zero) side = 'buy'
-  else if (to === zero) side = 'sell'
-
-  return { ts, amount, price: null, side }
-})
-.filter(t => t.amount > 0)
-.sort((a, b) => a.ts - b.ts)
-
+          txs = withTs.filter((t) => t.amount > 0).sort((a, b) => a.ts - b.ts)
+        }
 
         const windowed = range === 'all' ? txs : limitToWindow(txs, rangeMs)
         if (!cancelled) {
@@ -201,7 +195,9 @@ export default function TradeChart({
         if (!cancelled) setErr(e?.message || 'Failed to load trades')
       }
 
-      if (!cancelled) timerRef.current = setTimeout(run, POLL_MS)
+      if (!cancelled) {
+        timerRef.current = setTimeout(run, POLL_MS)
+      }
     }
 
     run()
@@ -209,7 +205,7 @@ export default function TradeChart({
       cancelled = true
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [address, range, rangeMs, pub])
+  }, [address, range, rangeMs])
 
   // Build candles with colored buy/sell volume
   const candles: Candle[] = useMemo(() => {
@@ -218,15 +214,17 @@ export default function TradeChart({
     for (const t of trades) {
       const bucket = Math.floor(t.ts / FIXED_INTERVAL_MS) * FIXED_INTERVAL_MS
       if (!grouped[bucket]) grouped[bucket] = { ts: bucket, price: null, buyVol: 0, sellVol: 0 }
+      if (typeof t.price === 'number') grouped[bucket].price = t.price
       if (t.side === 'sell') grouped[bucket].sellVol += t.amount
       else if (t.side === 'buy') grouped[bucket].buyVol += t.amount
+      // transfers contribute to neither volume bar
     }
     return Object.values(grouped).sort((a, b) => a.ts - b.ts)
   }, [trades])
 
   const data = useMemo(
     () =>
-      candles.map(c => ({
+      candles.map((c) => ({
         time: new Date(c.ts).toLocaleTimeString(),
         price: c.price,
         buyVol: c.buyVol,
@@ -235,7 +233,7 @@ export default function TradeChart({
     [candles]
   )
 
-  const hasPrice = data.some(d => typeof d.price === 'number' && !Number.isNaN(d.price))
+  const hasPrice = data.some((d) => typeof d.price === 'number' && !Number.isNaN(d.price))
 
   return (
     <div className="trade-chart-wrap" style={{ paddingTop: 12, position: 'relative' }}>
@@ -259,7 +257,7 @@ export default function TradeChart({
         className="chart-controls"
         style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}
       >
-        {RANGES.map(r => (
+        {RANGES.map((r) => (
           <button
             key={r.key}
             onClick={() => setRange(r.key)}
@@ -290,16 +288,10 @@ export default function TradeChart({
               <YAxis hide />
               <Tooltip />
               {/* stacked colored volume */}
-              <Bar dataKey="buyVol" stackId="v" barSize={3} fill="#16a34a" />   {/* green */}
-              <Bar dataKey="sellVol" stackId="v" barSize={3} fill="#dc2626" />  {/* red */}
+              <Bar dataKey="buyVol" stackId="v" barSize={3} fill="#16a34a" />
+              <Bar dataKey="sellVol" stackId="v" barSize={3} fill="#dc2626" />
               {hasPrice && (
-                <Line
-                  type="monotone"
-                  dataKey="price"
-                  stroke="#00ffb3"
-                  dot={false}
-                  strokeWidth={2}
-                />
+                <Line type="monotone" dataKey="price" stroke="#00ffb3" dot={false} strokeWidth={2} />
               )}
             </ComposedChart>
           </ResponsiveContainer>
@@ -314,8 +306,8 @@ export default function TradeChart({
 
       {!hasPrice && data.length > 0 && (
         <div style={{ color: '#999', marginTop: 6, fontSize: 12, textAlign: 'center' }}>
-          Showing colored volume inferred from events/transfers. Price line will appear when
-          on-chain Trade events include price data.
+          Showing colored volume inferred from ERC-20 transfers. Price line will appear when
+          on-chain Trade events are present.
         </div>
       )}
 
@@ -341,8 +333,7 @@ export default function TradeChart({
                 <span style={{ color: '#888' }}>{formatTime(t.ts)}</span>
                 <span
                   style={{
-                    color:
-                      t.side === 'buy' ? '#16a34a' : t.side === 'sell' ? '#dc2626' : '#aaa',
+                    color: t.side === 'buy' ? '#16a34a' : t.side === 'sell' ? '#dc2626' : '#aaa',
                     fontWeight: 600,
                   }}
                 >
