@@ -140,16 +140,18 @@ export default function TradeChart({
           })
         )
 
-        let txs: TradeLike[] = logs.map((l) => {
-          const isBuy = l.eventName === 'Buy'
-          const ts = blockMap.get(l.blockNumber!) ?? Date.now()
-          // amounts are 18 decimals
-          const amount = Number(
-            isBuy ? (l as any).args.tokensOut : (l as any).args.amountIn
-          ) / 1e18
-          return { ts, amount, price: null, side: isBuy ? 'buy' : 'sell' }
-        }).filter(t => t.amount > 0)
-          .sort((a, b) => a.ts - b.ts)
+        let txs: TradeLike[] = (logs as any[]).map((l: any) => {
+  const isBuy = l.eventName === 'Buy'
+  const ts = blockMap.get(l.blockNumber!) ?? Date.now()
+  const amount =
+    Number(isBuy ? l.args.tokensOut : l.args.amountIn) / 1e18
+
+  const side: Side = isBuy ? 'buy' : 'sell' // <- force literal type
+  return { ts, amount, price: null, side }
+})
+.filter(t => t.amount > 0)
+.sort((a, b) => a.ts - b.ts)
+
 
         // 2) Fallback: if no native trades (early blocks), infer from ERC-20 Transfer
         if (txs.length === 0) {
@@ -174,21 +176,21 @@ export default function TradeChart({
           )
 
           const zero = '0x0000000000000000000000000000000000000000'
-          txs = tLogs.slice(-300).map((l) => {
-            const ts = blockMap.get(l.blockNumber!) ?? Date.now()
-            const from = (l.args?.from as Address | undefined)?.toLowerCase()
-            const to = (l.args?.to as Address | undefined)?.toLowerCase()
-            const amount = Number(l.args?.value ?? 0n) / 1e18
+          txs = tLogs.slice(-300).map((l: any) => {
+  const ts = blockMap.get(l.blockNumber!) ?? Date.now()
+  const from = (l.args?.from as Address | undefined)?.toLowerCase()
+  const to = (l.args?.to as Address | undefined)?.toLowerCase()
+  const amount = Number(l.args?.value ?? 0n) / 1e18
 
-            // heuristic: mint -> buy, burn -> sell, else neutral transfer
-            let side: Side = 'transfer'
-            if (from === zero) side = 'buy'
-            else if (to === zero) side = 'sell'
+  let side: Side = 'transfer'
+  if (from === zero) side = 'buy'
+  else if (to === zero) side = 'sell'
 
-            return { ts, amount, price: null, side }
-          }).filter(t => t.amount > 0)
-            .sort((a, b) => a.ts - b.ts)
-        }
+  return { ts, amount, price: null, side }
+})
+.filter(t => t.amount > 0)
+.sort((a, b) => a.ts - b.ts)
+
 
         const windowed = range === 'all' ? txs : limitToWindow(txs, rangeMs)
         if (!cancelled) {
