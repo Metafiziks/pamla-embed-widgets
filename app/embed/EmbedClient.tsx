@@ -100,10 +100,10 @@ async function legacyCaps() {
 
     // 3) send (NOTE: no `type`, no `gasPrice`, keep sim.gas)
     const hash = await wallet.writeContract({
-      ...sim.request,
-      maxFeePerGas,
-      maxPriorityFeePerGas,
-    })
+  ...(sim.request as any),
+  maxFeePerGas,
+  maxPriorityFeePerGas,
+})
 
     await publicClient.waitForTransactionReceipt({ hash })
     alert('Buy sent')
@@ -145,10 +145,10 @@ async function legacyCaps() {
 
     // 3) send (keep sim.gas, no `type`, no `gasPrice`)
     const hash = await wallet.writeContract({
-      ...sim.request,
-      maxFeePerGas,
-      maxPriorityFeePerGas,
-    })
+  ...(sim.request as any),
+  maxFeePerGas,
+  maxPriorityFeePerGas,
+})
 
     await publicClient.waitForTransactionReceipt({ hash })
     alert('Sell sent')
