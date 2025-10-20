@@ -93,6 +93,13 @@ const doBuy = async () => {
       value,
     })
 
+
+console.log('[TX params]', {
+  gas: sim.request.gas?.toString(),
+  maxFeePerGas: maxFeePerGas?.toString(),
+  maxPriorityFeePerGas: maxPriorityFeePerGas?.toString(),
+})
+
     // 3) send with ONLY eip-1559 caps + gas (no legacy fields)
     const hash = await wallet.writeContract({
       account: address as `0x${string}`,
@@ -138,6 +145,12 @@ const doSell = async () => {
       functionName: 'sellTokens',
       args: [amountIn, 1n],
     })
+
+console.log('[TX params]', {
+  gas: sim.request.gas?.toString(),
+  maxFeePerGas: maxFeePerGas?.toString(),
+  maxPriorityFeePerGas: maxPriorityFeePerGas?.toString(),
+})
 
     // 3) send using those estimates
     const hash = await wallet.writeContract({
