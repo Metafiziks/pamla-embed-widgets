@@ -79,41 +79,23 @@ async function legacyCaps() {
   try {
     const value = parseEther(ethIn || '0.01')
 
-    // 1) simulate with your public client (already used elsewhere)
-    const sim = await publicClient.simulateContract({
+    // ✅ No simulate spread, no manual fee caps, no gas override.
+    const hash = await wallet.writeContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'buyExactEth',
       args: [0n],
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
       value,
     })
 
-    // 2) gentle EIP-1559 caps
-    const fees = await publicClient.estimateFeesPerGas({ chain: abstractSepolia })
-    const maxFeePerGas        = fees.maxFeePerGas  ?? (1_000_000_000n)       // 1 gwei fallback
-    const maxPriorityFeePerGas= fees.maxPriorityFeePerGas ?? (100_000_000n)  // 0.1 gwei fallback
-
-    console.log('[buy] gas', sim.request.gas?.toString(), 'caps',
-      String(maxFeePerGas), String(maxPriorityFeePerGas))
-
-    // 3) send (NOTE: no `type`, no `gasPrice`, keep sim.gas)
-    const hash = await wallet.writeContract({
-  ...(sim.request as any),
-  maxFeePerGas,
-  maxPriorityFeePerGas,
-})
-
-    await publicClient.waitForTransactionReceipt({ hash })
-    alert('Buy sent')
+    alert(`Buy sent: ${hash}`)
   } catch (e: any) {
-    console.error('[buy] error', e)
     alert(e?.shortMessage || e?.message || 'Buy failed')
-  } finally {
-    setBusy(false)
-  }
+  } finally { setBusy(false) }
 }
+
 
  const doSell = async () => {
   if (!isConnected) { connect({ connector: injectedConnector }); return }
@@ -124,40 +106,33 @@ async function legacyCaps() {
   setBusy(true)
   try {
     const amountIn = parseEther(tokIn || '10')
+    if (amountIn <= 0n) return alert('Amount must be > 0')
 
-    // 1) simulate sell (your token = curve)
-    const sim = await publicClient.simulateContract({
+    // Optional preflight only (to catch immediate reverts in UI).
+    // NOTE: we DO NOT spread sim.request into the wallet call.
+    await pub.simulateContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'sellTokens',
-      args: [amountIn, 1n], // 1 wei min out to avoid zero edge-case
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
+      args: [amountIn, 1n], // minEthOut = 1 wei (avoid zero-min edge case)
     })
 
-    // 2) EIP-1559 fee caps
-    const fees = await publicClient.estimateFeesPerGas({ chain: abstractSepolia })
-    const maxFeePerGas         = fees.maxFeePerGas        ?? (1_000_000_000n)
-    const maxPriorityFeePerGas = fees.maxPriorityFeePerGas?? (100_000_000n)
-
-    console.log('[sell] gas', sim.request.gas?.toString(), 'caps',
-      String(maxFeePerGas), String(maxPriorityFeePerGas))
-
-    // 3) send (keep sim.gas, no `type`, no `gasPrice`)
+    // ✅ Let wallet estimate gas/fees normally
     const hash = await wallet.writeContract({
-  ...(sim.request as any),
-  maxFeePerGas,
-  maxPriorityFeePerGas,
-})
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'sellTokens',
+      args: [amountIn, 1n],
+    })
 
-    await publicClient.waitForTransactionReceipt({ hash })
-    alert('Sell sent')
+    alert(`Sell sent: ${hash}`)
   } catch (e: any) {
-    console.error('[sell] error', e)
     alert(e?.shortMessage || e?.message || 'Sell failed')
-  } finally {
-    setBusy(false)
-  }
+  } finally { setBusy(false) }
 }
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
