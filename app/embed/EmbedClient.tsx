@@ -1,13 +1,13 @@
-import type { Abi } from 'viem';
+import type { Abi } from 'viem'
 
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { useAccount, useConnect, useWalletClient } from 'wagmi'
 import { injected } from 'wagmi/connectors'
-import { parseEther, parseGwei } from 'viem'
+import { createPublicClient, http, parseEther, parseGwei } from 'viem'
 import { publicClient } from '@/lib/viem'
-import TokenJson from '@/lib/abi/BondingCurveToken.json';
-const TokenABI = TokenJson.abi as Abi; // ✅ use the abi array, typed as Abi
+import TokenJson from '@/lib/abi/BondingCurveToken.json'
+const TokenABI = TokenJson.abi as Abi
 
 import { abstractSepolia } from '../../lib/wagmi'
 import TradeChart from '../../components/TradeChart'
@@ -16,21 +16,25 @@ export default function EmbedClient() {
   const qs = useSearchParams()
   const admin = qs.get('admin') === '1'
 
+  // --- Fix: create explicit viem client for simulation ---
+  const absRpc = process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'
+  const pub = useMemo(
+    () => createPublicClient({ chain: abstractSepolia, transport: http(absRpc) }),
+    [absRpc]
+  )
 
-// Always use legacy gas on Abstract Sepolia to avoid MM's wild EIP-1559 guesses.
-async function legacyCaps() {
-  // Hard-cap at 1 gwei (override via NEXT_PUBLIC_ABS_GAS_PRICE_GWEI if you want)
-  const hardCap = parseGwei(process.env.NEXT_PUBLIC_ABS_GAS_PRICE_GWEI ?? '1')
-  // If node returns something silly, ignore and use hardCap
-  try {
-    const node = await publicClient.getGasPrice()
-    return { type: 'legacy' as const, gasPrice: node > hardCap * 5n ? hardCap : node }
-  } catch {
-    return { type: 'legacy' as const, gasPrice: hardCap }
+  // --- Legacy gas cap helper (unchanged) ---
+  async function legacyCaps() {
+    const hardCap = parseGwei(process.env.NEXT_PUBLIC_ABS_GAS_PRICE_GWEI ?? '1')
+    try {
+      const node = await publicClient.getGasPrice()
+      return { type: 'legacy' as const, gasPrice: node > hardCap * 5n ? hardCap : node }
+    } catch {
+      return { type: 'legacy' as const, gasPrice: hardCap }
+    }
   }
-}
 
-  // 🔒 Centralized token precedence: NEXT_PUBLIC_TOKEN > ?curve= > NEXT_PUBLIC_DEFAULT_CURVE
+  // --- Token selection (unchanged) ---
   const token = useMemo(() => {
     const bad = '0x000000000000000000000000000000000000800a'
     const envT = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}` | ''
@@ -41,9 +45,7 @@ async function legacyCaps() {
     return (envCurve && envCurve.toLowerCase() !== bad ? envCurve : '') as `0x${string}`
   }, [qs])
 
-  // keep the rest of the file using `curve` so no other code needs to change
   const curve = token || null
-
   const defaultChain = Number(process.env.NEXT_PUBLIC_DEFAULT_CHAIN || '11124')
   const chain = Number(qs.get('chain') || defaultChain)
 
@@ -58,7 +60,9 @@ async function legacyCaps() {
   const [tokIn, setTokIn] = useState('10')
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => { document.body.style.background = 'transparent' }, [])
+  useEffect(() => {
+    document.body.style.background = 'transparent'
+  }, [])
 
   const guardChain = () => {
     if (!activeChain || activeChain.id !== abstractSepolia.id) {
@@ -68,105 +72,118 @@ async function legacyCaps() {
     return true
   }
 
-const doBuy = async () => {
-  if (!isConnected) { connect({ connector: injectedConnector }); return }
-  if (!curve) return alert('Missing curve address')
-  if (!guardChain()) return
-  if (!wallet) return alert('Wallet not ready')
+  // --- BUY ---
+  const doBuy = async () => {
+    if (!isConnected) { connect({ connector: injectedConnector }); return }
+    if (!curve) return alert('Missing curve address')
+    if (!guardChain()) return
+    if (!wallet) return alert('Wallet not ready')
 
-  setBusy(true)
-  try {
-    const value = parseEther(ethIn || '0.01')
+    setBusy(true)
+    try {
+      const value = parseEther(ethIn || '0.01')
 
-    // 1) Pre-simulate ONLY to get a good gas limit
-    const sim = await pub.simulateContract({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
-      address: curve as `0x${string}`,
-      abi: TokenABI,
-      functionName: 'buyExactEth',
-      args: [0n],
-      value,
-    })
-    // MetaMask shows fees based on this gas value
-    const gas = sim.request.gas
-    console.log('[buy] simulated gas =', gas?.toString())
+      // Pre-simulate to get realistic gas limit
+      const sim = await pub.simulateContract({
+        account: address as `0x${string}`,
+        chain: abstractSepolia,
+        address: curve as `0x${string}`,
+        abi: TokenABI,
+        functionName: 'buyExactEth',
+        args: [0n],
+        value,
+      })
+      const gas = sim.request.gas
+      console.log('[buy] simulated gas', gas?.toString())
 
-    // 2) Send WITHOUT spreading sim.request (wallet owns fee fields)
-    const hash = await wallet.writeContract({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
-      address: curve as `0x${string}`,
-      abi: TokenABI,
-      functionName: 'buyExactEth',
-      args: [0n],
-      value,
-      gas, // <- provide only gas limit
-    })
-    alert(`Buy sent: ${hash}`)
-  } catch (e: any) {
-    alert(e?.shortMessage || e?.message || 'Buy failed')
-  } finally { setBusy(false) }
-}
+      const hash = await wallet.writeContract({
+        account: address as `0x${string}`,
+        chain: abstractSepolia,
+        address: curve as `0x${string}`,
+        abi: TokenABI,
+        functionName: 'buyExactEth',
+        args: [0n],
+        value,
+        gas, // 👈 only gas limit
+      })
+      alert(`Buy sent: ${hash}`)
+    } catch (e: any) {
+      alert(e?.shortMessage || e?.message || 'Buy failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
-const doSell = async () => {
-  if (!isConnected) { connect({ connector: injectedConnector }); return }
-  if (!curve) return alert('Missing curve address')
-  if (!guardChain()) return
-  if (!wallet) return alert('Wallet not ready')
+  // --- SELL ---
+  const doSell = async () => {
+    if (!isConnected) { connect({ connector: injectedConnector }); return }
+    if (!curve) return alert('Missing curve address')
+    if (!guardChain()) return
+    if (!wallet) return alert('Wallet not ready')
 
-  setBusy(true)
-  try {
-    const amountIn = parseEther(tokIn || '10')
+    setBusy(true)
+    try {
+      const amountIn = parseEther(tokIn || '10')
 
-    // Pre-simulate to get a sane gas limit (use minEthOut=1n to avoid zero-min quirks)
-    const sim = await pub.simulateContract({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
-      address: curve as `0x${string}`,
-      abi: TokenABI,
-      functionName: 'sellTokens',
-      args: [amountIn, 1n],
-    })
-    const gas = sim.request.gas
-    console.log('[sell] simulated gas =', gas?.toString())
+      const sim = await pub.simulateContract({
+        account: address as `0x${string}`,
+        chain: abstractSepolia,
+        address: curve as `0x${string}`,
+        abi: TokenABI,
+        functionName: 'sellTokens',
+        args: [amountIn, 1n],
+      })
+      const gas = sim.request.gas
+      console.log('[sell] simulated gas', gas?.toString())
 
-    // Send w/ only gas limit; let wallet fill EIP-1559 caps
-    const hash = await wallet.writeContract({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
-      address: curve as `0x${string}`,
-      abi: TokenABI,
-      functionName: 'sellTokens',
-      args: [amountIn, 1n],
-      gas,
-    })
-    alert(`Sell sent: ${hash}`)
-  } catch (e: any) {
-    alert(e?.shortMessage || e?.message || 'Sell failed')
-  } finally { setBusy(false) }
-}
+      const hash = await wallet.writeContract({
+        account: address as `0x${string}`,
+        chain: abstractSepolia,
+        address: curve as `0x${string}`,
+        abi: TokenABI,
+        functionName: 'sellTokens',
+        args: [amountIn, 1n],
+        gas,
+      })
+      alert(`Sell sent: ${hash}`)
+    } catch (e: any) {
+      alert(e?.shortMessage || e?.message || 'Sell failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
   const iframeCode = `<iframe
   src="${origin}/embed?curve=${curve || ''}&chain=${chain}"
   width="100%" height="950" style="border:0;background:transparent" loading="lazy"></iframe>`
 
-  if (!curve) return (
-    <div style={{color:'#fff'}}>
-      Missing curve address. Pass <code>?curve=0x...</code> or set <code>NEXT_PUBLIC_DEFAULT_CURVE</code>.
-    </div>
-  )
+  if (!curve) {
+    return (
+      <div style={{ color: '#fff' }}>
+        Missing curve address. Pass <code>?curve=0x...</code> or set <code>NEXT_PUBLIC_DEFAULT_CURVE</code>.
+      </div>
+    )
+  }
 
   return (
-    <div style={{fontFamily:'ui-sans-serif,system-ui,Arial', color:'#f2f2f2'}}>
+    <div style={{ fontFamily: 'ui-sans-serif,system-ui,Arial', color: '#f2f2f2' }}>
       {admin && (
-        <div className="card" style={{background:'#0e0e10', marginBottom:12}}>
+        <div className="card" style={{ background: '#0e0e10', marginBottom: 12 }}>
           <b>Admin Embed</b>
-          <div style={{marginTop:8}}>
-            <button onClick={async()=>{ await navigator.clipboard.writeText(iframeCode); alert('Embed code copied!')}}>Copy iframe</button>
+          <div style={{ marginTop: 8 }}>
+            <button
+              onClick={async () => {
+                await navigator.clipboard.writeText(iframeCode)
+                alert('Embed code copied!')
+              }}
+            >
+              Copy iframe
+            </button>
           </div>
-          <pre style={{whiteSpace:'pre-wrap', marginTop:8, fontSize:12, opacity:.85}}>{iframeCode}</pre>
+          <pre style={{ whiteSpace: 'pre-wrap', marginTop: 8, fontSize: 12, opacity: 0.85 }}>
+            {iframeCode}
+          </pre>
         </div>
       )}
 
@@ -174,25 +191,34 @@ const doSell = async () => {
         {!isConnected ? (
           <button onClick={() => connect({ connector: injectedConnector })}>Connect Wallet</button>
         ) : (
-          <div style={{fontSize:12, opacity:.8}}>Connected: {address?.slice(0,6)}…{address?.slice(-4)}</div>
-        )}
-        <div style={{display:'flex', gap:12, marginTop:12}}>
-          <div style={{flex:1}}>
-            <label>Buy with ETH</label>
-            <input value={ethIn} onChange={e=>setEthIn(e.target.value)} />
-            <button onClick={doBuy} disabled={busy} style={{marginTop:8}}>Buy</button>
+          <div style={{ fontSize: 12, opacity: 0.8 }}>
+            Connected: {address?.slice(0, 6)}…{address?.slice(-4)}
           </div>
-          <div style={{flex:1}}>
+        )}
+
+        <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label>Buy with ETH</label>
+            <input value={ethIn} onChange={(e) => setEthIn(e.target.value)} />
+            <button onClick={doBuy} disabled={busy} style={{ marginTop: 8 }}>
+              Buy
+            </button>
+          </div>
+          <div style={{ flex: 1 }}>
             <label>Sell tokens</label>
-            <input value={tokIn} onChange={e=>setTokIn(e.target.value)} />
-            <button onClick={doSell} disabled={busy} style={{marginTop:8}}>Sell</button>
+            <input value={tokIn} onChange={(e) => setTokIn(e.target.value)} />
+            <button onClick={doSell} disabled={busy} style={{ marginTop: 8 }}>
+              Sell
+            </button>
           </div>
         </div>
       </div>
+
       <div className="card">
         <b>Live Trades</b>
         <TradeChart address={curve} />
       </div>
+
       <style>{`
         .card{border:1px solid #222;padding:16px;border-radius:16px;background:#0e0e10;margin-bottom:12px}
         button{padding:8px 12px;border:1px solid #333;background:#111;color:#fff;border-radius:8px;cursor:pointer}
