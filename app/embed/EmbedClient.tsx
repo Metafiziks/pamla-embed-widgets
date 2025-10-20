@@ -240,7 +240,7 @@ const doBuy = async () => {
 
         <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
           <div style={{ flex: 1 }}>
-            <label>Buy with ETH</label>
+            <label>Buy with Abstract Sepolia ETH</label>
             <input value={ethIn} onChange={(e) => setEthIn(e.target.value)} />
             <button onClick={doBuy} disabled={busy} style={{ marginTop: 8 }}>
               Buy
