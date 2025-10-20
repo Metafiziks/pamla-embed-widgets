@@ -78,7 +78,18 @@ async function legacyCaps() {
   try {
     const value = parseEther(ethIn || '0.01')
 
-    // ✅ No simulate spread, no manual fee caps, no gas override.
+    // (Optional) quick preflight: catch immediate revert in UI
+    await publicClient.simulateContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'buyExactEth',
+      args: [0n],
+      value,
+    })
+
+    // 🔹 Let MetaMask do EIP-1559 estimation. No gas / fee fields passed.
     const hash = await wallet.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -92,11 +103,12 @@ async function legacyCaps() {
     alert(`Buy sent: ${hash}`)
   } catch (e: any) {
     alert(e?.shortMessage || e?.message || 'Buy failed')
-  } finally { setBusy(false) }
+  } finally {
+    setBusy(false)
+  }
 }
 
-
- const doSell = async () => {
+const doSell = async () => {
   if (!isConnected) { connect({ connector: injectedConnector }); return }
   if (!curve) return alert('Missing curve address')
   if (!guardChain()) return
@@ -105,20 +117,18 @@ async function legacyCaps() {
   setBusy(true)
   try {
     const amountIn = parseEther(tokIn || '10')
-    if (amountIn <= 0n) return alert('Amount must be > 0')
 
-    // Optional preflight only (to catch immediate reverts in UI).
-    // NOTE: we DO NOT spread sim.request into the wallet call.
+    // (Optional) preflight to surface reverts
     await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'sellTokens',
-      args: [amountIn, 1n], // minEthOut = 1 wei (avoid zero-min edge case)
+      args: [amountIn, 1n], // 1 wei min-out to avoid zero-min edge cases
     })
 
-    // ✅ Let wallet estimate gas/fees normally
+    // 🔹 Let MetaMask estimate gas & fees (EIP-1559). Pass nothing extra.
     const hash = await wallet.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -131,7 +141,9 @@ async function legacyCaps() {
     alert(`Sell sent: ${hash}`)
   } catch (e: any) {
     alert(e?.shortMessage || e?.message || 'Sell failed')
-  } finally { setBusy(false) }
+  } finally {
+    setBusy(false)
+  }
 }
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
