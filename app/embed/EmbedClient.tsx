@@ -4,20 +4,13 @@ import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { useAccount, useConnect, useWalletClient } from 'wagmi'
 import { injected } from 'wagmi/connectors'
-import { createPublicClient, http, parseEther, parseGwei } from 'viem'
+import { parseEther, parseGwei } from 'viem'
 import { publicClient } from '@/lib/viem'
 import TokenJson from '@/lib/abi/BondingCurveToken.json';
 const TokenABI = TokenJson.abi as Abi; // ✅ use the abi array, typed as Abi
 
 import { abstractSepolia } from '../../lib/wagmi'
 import TradeChart from '../../components/TradeChart'
-
-// public client for simulating (read-only)
-const publicClient = createPublicClient({
-  chain: abstractSepolia,
-  transport: http(process.env.NEXT_PUBLIC_ABSTRACT_RPC || 'https://api.testnet.abs.xyz'),
-})
-
 
 export default function EmbedClient() {
   const qs = useSearchParams()
