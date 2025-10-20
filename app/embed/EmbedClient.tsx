@@ -113,35 +113,19 @@ export default function EmbedClient() {
     const amountIn = parseEther(tokIn || '0')
     if (amountIn <= 0n) { alert('Enter a token amount'); return }
 
-    // Get sane fee caps from the RPC (fallback if estimation fails)
-    let maxFeePerGas: bigint | undefined
-    let maxPriorityFeePerGas: bigint | undefined
-    try {
-      const fees = await publicClient.estimateFeesPerGas()
-      maxFeePerGas = fees.maxFeePerGas
-      maxPriorityFeePerGas = fees.maxPriorityFeePerGas
-    } catch {
-      maxPriorityFeePerGas = parseGwei('1')
-      maxFeePerGas = parseGwei('2')
-    }
-
-    // Simulate to lock gas limit & calldata, and catch reverts early
+    // 1) Simulate to get a fully-typed request (locks calldata, gas, etc.)
     const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'sellTokens',
-      // Use minEthOut = 1n to avoid “zero-min” edge cases
+      // Use minEthOut = 1n to avoid zero-min edge cases
       args: [amountIn, 1n],
     })
 
-    // Send exactly what we simulated, with explicit EIP-1559 fee caps
-    const hash = await wallet.writeContract({
-      ...sim.request,
-      maxFeePerGas,
-      maxPriorityFeePerGas,
-    })
+    // 2) Send exactly what we simulated (no extra fields)
+    const hash = await wallet.writeContract(sim.request)
 
     alert(`Sell sent: ${hash}`)
   } catch (e: any) {
