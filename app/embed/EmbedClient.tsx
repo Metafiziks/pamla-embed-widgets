@@ -78,12 +78,8 @@ const doBuy = async () => {
   try {
     const value = parseEther(ethIn || '0.01')
 
-    // 1) get sane EIP-1559 caps from the chain
-    const { maxFeePerGas, maxPriorityFeePerGas } =
-      await publicClient.estimateFeesPerGas({ chain: abstractSepolia })
-
-    // 2) simulate to get the gas limit
-    const sim = await publicClient.simulateContract({
+    // 1) Pre-simulate ONLY to get a good gas limit
+    const sim = await pub.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
@@ -92,15 +88,11 @@ const doBuy = async () => {
       args: [0n],
       value,
     })
+    // MetaMask shows fees based on this gas value
+    const gas = sim.request.gas
+    console.log('[buy] simulated gas =', gas?.toString())
 
-
-console.log('[TX params]', {
-  gas: sim.request.gas?.toString(),
-  maxFeePerGas: maxFeePerGas?.toString(),
-  maxPriorityFeePerGas: maxPriorityFeePerGas?.toString(),
-})
-
-    // 3) send with ONLY eip-1559 caps + gas (no legacy fields)
+    // 2) Send WITHOUT spreading sim.request (wallet owns fee fields)
     const hash = await wallet.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -109,17 +101,12 @@ console.log('[TX params]', {
       functionName: 'buyExactEth',
       args: [0n],
       value,
-      gas: sim.request.gas,                // from simulate
-      maxFeePerGas,                        // from estimateFeesPerGas
-      maxPriorityFeePerGas,                // from estimateFeesPerGas
+      gas, // <- provide only gas limit
     })
-
     alert(`Buy sent: ${hash}`)
   } catch (e: any) {
     alert(e?.shortMessage || e?.message || 'Buy failed')
-  } finally {
-    setBusy(false)
-  }
+  } finally { setBusy(false) }
 }
 
 const doSell = async () => {
@@ -132,12 +119,8 @@ const doSell = async () => {
   try {
     const amountIn = parseEther(tokIn || '10')
 
-    // 1) eip-1559 caps
-    const { maxFeePerGas, maxPriorityFeePerGas } =
-      await publicClient.estimateFeesPerGas({ chain: abstractSepolia })
-
-    // 2) simulate sellTokens(amountIn, minEthOut=1)
-    const sim = await publicClient.simulateContract({
+    // Pre-simulate to get a sane gas limit (use minEthOut=1n to avoid zero-min quirks)
+    const sim = await pub.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
@@ -145,14 +128,10 @@ const doSell = async () => {
       functionName: 'sellTokens',
       args: [amountIn, 1n],
     })
+    const gas = sim.request.gas
+    console.log('[sell] simulated gas =', gas?.toString())
 
-console.log('[TX params]', {
-  gas: sim.request.gas?.toString(),
-  maxFeePerGas: maxFeePerGas?.toString(),
-  maxPriorityFeePerGas: maxPriorityFeePerGas?.toString(),
-})
-
-    // 3) send using those estimates
+    // Send w/ only gas limit; let wallet fill EIP-1559 caps
     const hash = await wallet.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -160,17 +139,12 @@ console.log('[TX params]', {
       abi: TokenABI,
       functionName: 'sellTokens',
       args: [amountIn, 1n],
-      gas: sim.request.gas,
-      maxFeePerGas,
-      maxPriorityFeePerGas,
+      gas,
     })
-
     alert(`Sell sent: ${hash}`)
   } catch (e: any) {
     alert(e?.shortMessage || e?.message || 'Sell failed')
-  } finally {
-    setBusy(false)
-  }
+  } finally { setBusy(false) }
 }
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
