@@ -65,41 +65,23 @@ export default function EmbedClient() {
   try {
     const value = parseEther(ethIn || '0.01')
 
-    // Get sane EIP-1559 fees from your public client (testnets often can't USD-quote)
-    let maxFeePerGas: bigint | undefined
-    let maxPriorityFeePerGas: bigint | undefined
-    try {
-      const fees = await publicClient.estimateFeesPerGas()
-      maxFeePerGas = fees.maxFeePerGas
-      maxPriorityFeePerGas = fees.maxPriorityFeePerGas
-    } catch {
-      // Fallback cap if the RPC can’t estimate (keep conservative on testnet)
-      maxPriorityFeePerGas = parseGwei('1')
-      maxFeePerGas = parseGwei('2')
-    }
-
-    // Simulate to lock gas & calldata (prevents the wallet from re-estimating wildly)
     const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'buyExactEth',
-      args: [0n],              // slippage minOut placeholder
+      args: [0n], // adjust if you later add slippage controls
       value,
     })
 
-    // Send using the simulated request + our explicit fee caps
-    const hash = await wallet.writeContract({
-      ...sim.request,
-      maxFeePerGas,
-      maxPriorityFeePerGas,
-    })
-
+    const hash = await wallet.writeContract(sim.request)
     alert(`Buy sent: ${hash}`)
   } catch (e: any) {
     alert(e?.shortMessage || e?.message || 'Buy failed')
-  } finally { setBusy(false) }
+  } finally {
+    setBusy(false)
+  }
 }
 
   const doSell = async () => {
@@ -113,20 +95,18 @@ export default function EmbedClient() {
     const amountIn = parseEther(tokIn || '0')
     if (amountIn <= 0n) { alert('Enter a token amount'); return }
 
-    // 1) Simulate to get a fully-typed request (locks calldata, gas, etc.)
+    // 1) simulate (locks calldata, gas, etc.)
     const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'sellTokens',
-      // Use minEthOut = 1n to avoid zero-min edge cases
-      args: [amountIn, 1n],
+      args: [amountIn, 1n], // minEthOut = 1 wei (avoid zero-min edge cases)
     })
 
-    // 2) Send exactly what we simulated (no extra fields)
+    // 2) send EXACTLY what we simulated — no extra fields
     const hash = await wallet.writeContract(sim.request)
-
     alert(`Sell sent: ${hash}`)
   } catch (e: any) {
     alert(e?.shortMessage || e?.message || 'Sell failed')
