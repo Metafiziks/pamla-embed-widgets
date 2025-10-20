@@ -1,9 +1,7 @@
-
-
 import type { Abi } from 'viem';
 
 import { useSearchParams } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAccount, useConnect, useWalletClient } from 'wagmi'
 import { injected } from 'wagmi/connectors'
 import { parseEther } from 'viem'
@@ -18,8 +16,19 @@ export default function EmbedClient() {
   const qs = useSearchParams()
   const admin = qs.get('admin') === '1'
 
-  const defaultCurve = process.env.NEXT_PUBLIC_DEFAULT_CURVE as `0x${string}` | undefined
-  const curve = (qs.get('curve') as `0x${string}` | null) || defaultCurve || null
+  // 🔒 Centralized token precedence: NEXT_PUBLIC_TOKEN > ?curve= > NEXT_PUBLIC_DEFAULT_CURVE
+  const token = useMemo(() => {
+    const bad = '0x000000000000000000000000000000000000800a'
+    const envT = (process.env.NEXT_PUBLIC_TOKEN || '') as `0x${string}` | ''
+    const qsCurve = (qs.get('curve') as `0x${string}` | null) || null
+    const envCurve = process.env.NEXT_PUBLIC_DEFAULT_CURVE as `0x${string}` | undefined
+    if (envT && envT.toLowerCase() !== bad) return envT
+    if (qsCurve && qsCurve.toLowerCase() !== bad) return qsCurve
+    return (envCurve && envCurve.toLowerCase() !== bad ? envCurve : '') as `0x${string}`
+  }, [qs])
+
+  // keep the rest of the file using `curve` so no other code needs to change
+  const curve = token || null
 
   const defaultChain = Number(process.env.NEXT_PUBLIC_DEFAULT_CHAIN || '11124')
   const chain = Number(qs.get('chain') || defaultChain)
