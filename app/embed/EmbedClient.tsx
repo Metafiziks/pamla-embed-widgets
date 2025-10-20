@@ -73,46 +73,85 @@ export default function EmbedClient() {
   }
 
   // --- BUY ---
-  const doBuy = async () => {
-    if (!isConnected) { connect({ connector: injectedConnector }); return }
-    if (!curve) return alert('Missing curve address')
-    if (!guardChain()) return
-    if (!wallet) return alert('Wallet not ready')
-
-    setBusy(true)
-    try {
-      const value = parseEther(ethIn || '0.01')
-
-      // Pre-simulate to get realistic gas limit
-      const sim = await pub.simulateContract({
-        account: address as `0x${string}`,
-        chain: abstractSepolia,
-        address: curve as `0x${string}`,
-        abi: TokenABI,
-        functionName: 'buyExactEth',
-        args: [0n],
-        value,
-      })
-      const gas = sim.request.gas
-      console.log('[buy] simulated gas', gas?.toString())
-
-      const hash = await wallet.writeContract({
-        account: address as `0x${string}`,
-        chain: abstractSepolia,
-        address: curve as `0x${string}`,
-        abi: TokenABI,
-        functionName: 'buyExactEth',
-        args: [0n],
-        value,
-        gas, // 👈 only gas limit
-      })
-      alert(`Buy sent: ${hash}`)
-    } catch (e: any) {
-      alert(e?.shortMessage || e?.message || 'Buy failed')
-    } finally {
-      setBusy(false)
-    }
+  // Fixed doBuy function
+const doBuy = async () => {
+  if (!isConnected) { 
+    connect({ connector: injectedConnector }); 
+    return;
   }
+  if (!curve) return alert('Missing curve address');
+  if (!guardChain()) return;
+  if (!wallet) return alert('Wallet not ready');
+
+  setBusy(true);
+  try {
+    const value = parseEther(ethIn || '0.01');
+
+    // First, try to estimate gas properly
+    let gasEstimate: bigint | undefined;
+    
+    try {
+      // Use the public client to estimate gas
+      gasEstimate = await pub.estimateContractGas({
+        account: address as `0x${string}`,
+        address: curve as `0x${string}`,
+        abi: TokenABI,
+        functionName: 'buyExactEth',
+        args: [0n],
+        value,
+      });
+      
+      // Add 20% buffer to gas estimate for safety
+      gasEstimate = (gasEstimate * 120n) / 100n;
+      console.log('[buy] estimated gas with buffer:', gasEstimate.toString());
+    } catch (estimateError) {
+      console.warn('[buy] Gas estimation failed, trying simulation:', estimateError);
+      
+      // Fallback to simulation if estimation fails
+      try {
+        const sim = await pub.simulateContract({
+          account: address as `0x${string}`,
+          address: curve as `0x${string}`,
+          abi: TokenABI,
+          functionName: 'buyExactEth',
+          args: [0n],
+          value,
+        });
+        
+        // Use a reasonable default if simulation doesn't provide gas
+        gasEstimate = sim.request.gas || 500000n;
+        console.log('[buy] simulated gas:', gasEstimate.toString());
+      } catch (simError) {
+        console.error('[buy] Simulation also failed:', simError);
+        // Use a reasonable fallback gas limit
+        gasEstimate = 500000n;
+      }
+    }
+
+    // Get current gas price with your legacy cap
+    const gasPricing = await legacyCaps();
+
+    // Send transaction with explicit gas parameters
+    const hash = await wallet.writeContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'buyExactEth',
+      args: [0n],
+      value,
+      gas: gasEstimate,
+      ...gasPricing, // This spreads either { gasPrice: ... } for legacy
+    });
+    
+    alert(`Buy sent: ${hash}`);
+  } catch (e: any) {
+    console.error('Buy error:', e);
+    alert(e?.shortMessage || e?.message || 'Buy failed');
+  } finally {
+    setBusy(false);
+  }
+};
 
   // --- SELL ---
   const doSell = async () => {
