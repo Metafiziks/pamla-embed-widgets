@@ -65,14 +65,31 @@ export default function EmbedClient() {
   try {
     const value = parseEther(ethIn || '0.01')
 
+    // Pre-estimate on Abstract Sepolia and force legacy gas
+    const gasPrice = await publicClient.getGasPrice()
+    const gas = await publicClient.estimateContractGas({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'buyExactEth',
+      args: [0n],
+      value,
+      type: 'legacy',
+      gasPrice,
+    })
+
     const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'buyExactEth',
-      args: [0n], // adjust if you later add slippage controls
+      args: [0n],
       value,
+      type: 'legacy',
+      gasPrice,
+      gas,
     })
 
     const hash = await wallet.writeContract(sim.request)
@@ -95,17 +112,31 @@ export default function EmbedClient() {
     const amountIn = parseEther(tokIn || '0')
     if (amountIn <= 0n) { alert('Enter a token amount'); return }
 
-    // 1) simulate (locks calldata, gas, etc.)
+    // Pre-estimate and force legacy gas to avoid crazy EIP-1559 caps
+    const gasPrice = await publicClient.getGasPrice()
+    const gas = await publicClient.estimateContractGas({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'sellTokens',
+      args: [amountIn, 1n], // 1 wei min-out to avoid zero edge case
+      type: 'legacy',
+      gasPrice,
+    })
+
     const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'sellTokens',
-      args: [amountIn, 1n], // minEthOut = 1 wei (avoid zero-min edge cases)
+      args: [amountIn, 1n],
+      type: 'legacy',
+      gasPrice,
+      gas,
     })
 
-    // 2) send EXACTLY what we simulated — no extra fields
     const hash = await wallet.writeContract(sim.request)
     alert(`Sell sent: ${hash}`)
   } catch (e: any) {
