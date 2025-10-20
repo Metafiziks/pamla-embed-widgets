@@ -17,6 +17,20 @@ export default function EmbedClient() {
   const qs = useSearchParams()
   const admin = qs.get('admin') === '1'
 
+
+// Always use legacy gas on Abstract Sepolia to avoid MM's wild EIP-1559 guesses.
+async function legacyCaps() {
+  // Hard-cap at 1 gwei (override via NEXT_PUBLIC_ABS_GAS_PRICE_GWEI if you want)
+  const hardCap = parseGwei(process.env.NEXT_PUBLIC_ABS_GAS_PRICE_GWEI ?? '1')
+  // If node returns something silly, ignore and use hardCap
+  try {
+    const node = await publicClient.getGasPrice()
+    return { type: 'legacy' as const, gasPrice: node > hardCap * 5n ? hardCap : node }
+  } catch {
+    return { type: 'legacy' as const, gasPrice: hardCap }
+  }
+}
+
   // 🔒 Centralized token precedence: NEXT_PUBLIC_TOKEN > ?curve= > NEXT_PUBLIC_DEFAULT_CURVE
   const token = useMemo(() => {
     const bad = '0x000000000000000000000000000000000000800a'
@@ -64,9 +78,9 @@ export default function EmbedClient() {
   setBusy(true)
   try {
     const value = parseEther(ethIn || '0.01')
+    const caps = await legacyCaps()
 
-    // Pre-estimate on Abstract Sepolia and force legacy gas
-    const gasPrice = await publicClient.getGasPrice()
+    // estimate gas with legacy caps
     const gas = await publicClient.estimateContractGas({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -75,10 +89,10 @@ export default function EmbedClient() {
       functionName: 'buyExactEth',
       args: [0n],
       value,
-      type: 'legacy',
-      gasPrice,
+      ...caps,
     })
 
+    // simulate with the same legacy caps + gas
     const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -87,18 +101,16 @@ export default function EmbedClient() {
       functionName: 'buyExactEth',
       args: [0n],
       value,
-      type: 'legacy',
-      gasPrice,
+      ...caps,
       gas,
     })
 
+    // send exactly what we simulated (includes type: 'legacy' & gasPrice)
     const hash = await wallet.writeContract(sim.request)
     alert(`Buy sent: ${hash}`)
   } catch (e: any) {
     alert(e?.shortMessage || e?.message || 'Buy failed')
-  } finally {
-    setBusy(false)
-  }
+  } finally { setBusy(false) }
 }
 
   const doSell = async () => {
@@ -112,19 +124,20 @@ export default function EmbedClient() {
     const amountIn = parseEther(tokIn || '0')
     if (amountIn <= 0n) { alert('Enter a token amount'); return }
 
-    // Pre-estimate and force legacy gas to avoid crazy EIP-1559 caps
-    const gasPrice = await publicClient.getGasPrice()
+    const caps = await legacyCaps()
+
+    // estimate w/ legacy caps
     const gas = await publicClient.estimateContractGas({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'sellTokens',
-      args: [amountIn, 1n], // 1 wei min-out to avoid zero edge case
-      type: 'legacy',
-      gasPrice,
+      args: [amountIn, 1n],   // 1 wei min-out avoids zero edge case
+      ...caps,
     })
 
+    // simulate w/ same caps
     const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -132,8 +145,7 @@ export default function EmbedClient() {
       abi: TokenABI,
       functionName: 'sellTokens',
       args: [amountIn, 1n],
-      type: 'legacy',
-      gasPrice,
+      ...caps,
       gas,
     })
 
@@ -141,9 +153,7 @@ export default function EmbedClient() {
     alert(`Sell sent: ${hash}`)
   } catch (e: any) {
     alert(e?.shortMessage || e?.message || 'Sell failed')
-  } finally {
-    setBusy(false)
-  }
+  } finally { setBusy(false) }
 }
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
