@@ -1,12 +1,13 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { createPublicClient, http, formatEther } from 'viem'
-import { mainnet, erc20Abi } from 'viem/chains'
+import { createPublicClient, http, formatEther, erc20Abi } from 'viem'
+import { mainnet } from 'viem/chains'
 
 import AccessControllerABI from '@/lib/abi/AccessController.json'
 import PointsManagerABI    from '@/lib/abi/PointsManager.json'
 import { erc721Abi as ERC721ABI } from 'viem'
+
 
 // Minimal chain object for Abstract Sepolia
 const abstractSepolia = {
