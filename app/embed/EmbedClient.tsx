@@ -68,7 +68,7 @@ async function legacyCaps() {
     return true
   }
 
-  const doBuy = async () => {
+const doBuy = async () => {
   if (!isConnected) { connect({ connector: injectedConnector }); return }
   if (!curve) return alert('Missing curve address')
   if (!guardChain()) return
@@ -78,8 +78,12 @@ async function legacyCaps() {
   try {
     const value = parseEther(ethIn || '0.01')
 
-    // (Optional) quick preflight: catch immediate revert in UI
-    await publicClient.simulateContract({
+    // 1) get sane EIP-1559 caps from the chain
+    const { maxFeePerGas, maxPriorityFeePerGas } =
+      await publicClient.estimateFeesPerGas({ chain: abstractSepolia })
+
+    // 2) simulate to get the gas limit
+    const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
@@ -89,7 +93,7 @@ async function legacyCaps() {
       value,
     })
 
-    // 🔹 Let MetaMask do EIP-1559 estimation. No gas / fee fields passed.
+    // 3) send with ONLY eip-1559 caps + gas (no legacy fields)
     const hash = await wallet.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -98,6 +102,9 @@ async function legacyCaps() {
       functionName: 'buyExactEth',
       args: [0n],
       value,
+      gas: sim.request.gas,                // from simulate
+      maxFeePerGas,                        // from estimateFeesPerGas
+      maxPriorityFeePerGas,                // from estimateFeesPerGas
     })
 
     alert(`Buy sent: ${hash}`)
@@ -118,17 +125,21 @@ const doSell = async () => {
   try {
     const amountIn = parseEther(tokIn || '10')
 
-    // (Optional) preflight to surface reverts
-    await publicClient.simulateContract({
+    // 1) eip-1559 caps
+    const { maxFeePerGas, maxPriorityFeePerGas } =
+      await publicClient.estimateFeesPerGas({ chain: abstractSepolia })
+
+    // 2) simulate sellTokens(amountIn, minEthOut=1)
+    const sim = await publicClient.simulateContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'sellTokens',
-      args: [amountIn, 1n], // 1 wei min-out to avoid zero-min edge cases
+      args: [amountIn, 1n],
     })
 
-    // 🔹 Let MetaMask estimate gas & fees (EIP-1559). Pass nothing extra.
+    // 3) send using those estimates
     const hash = await wallet.writeContract({
       account: address as `0x${string}`,
       chain: abstractSepolia,
@@ -136,6 +147,9 @@ const doSell = async () => {
       abi: TokenABI,
       functionName: 'sellTokens',
       args: [amountIn, 1n],
+      gas: sim.request.gas,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
     })
 
     alert(`Sell sent: ${hash}`)
