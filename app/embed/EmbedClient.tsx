@@ -4,7 +4,8 @@ import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { useAccount, useConnect, useWalletClient } from 'wagmi'
 import { injected } from 'wagmi/connectors'
-import { parseEther } from 'viem'
+import { parseEther, parseGwei } from 'viem'
+import { publicClient } from '@/lib/viem'
 import TokenJson from '@/lib/abi/BondingCurveToken.json';
 const TokenABI = TokenJson.abi as Abi; // ✅ use the abi array, typed as Abi
 
@@ -55,51 +56,100 @@ export default function EmbedClient() {
   }
 
   const doBuy = async () => {
-    if (!isConnected) { connect({ connector: injectedConnector }); return }
-    if (!curve) return alert('Missing curve address')
-    if (!guardChain()) return
-    if (!wallet) return alert('Wallet not ready')
+  if (!isConnected) { connect({ connector: injectedConnector }); return }
+  if (!curve) return alert('Missing curve address')
+  if (!guardChain()) return
+  if (!wallet) return alert('Wallet not ready')
 
-    setBusy(true)
+  setBusy(true)
+  try {
+    const value = parseEther(ethIn || '0.01')
+
+    // Get sane EIP-1559 fees from your public client (testnets often can't USD-quote)
+    let maxFeePerGas: bigint | undefined
+    let maxPriorityFeePerGas: bigint | undefined
     try {
-      const value = parseEther(ethIn || '0.01')
-      await wallet.writeContract({
-        account: address as `0x${string}`,
-        chain: abstractSepolia,
-        address: curve as `0x${string}`,
-        abi: TokenABI,
-        functionName: 'buyExactEth',
-        args: [0n], // slippage param is placeholder; adjust if you add quotes
-        value,
-      })
-      alert('Buy sent')
-    } catch (e: any) {
-      alert(e?.shortMessage || e?.message || 'Buy failed')
-    } finally { setBusy(false) }
-  }
+      const fees = await publicClient.estimateFeesPerGas()
+      maxFeePerGas = fees.maxFeePerGas
+      maxPriorityFeePerGas = fees.maxPriorityFeePerGas
+    } catch {
+      // Fallback cap if the RPC can’t estimate (keep conservative on testnet)
+      maxPriorityFeePerGas = parseGwei('1')
+      maxFeePerGas = parseGwei('2')
+    }
+
+    // Simulate to lock gas & calldata (prevents the wallet from re-estimating wildly)
+    const sim = await publicClient.simulateContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'buyExactEth',
+      args: [0n],              // slippage minOut placeholder
+      value,
+    })
+
+    // Send using the simulated request + our explicit fee caps
+    const hash = await wallet.writeContract({
+      ...sim.request,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+    })
+
+    alert(`Buy sent: ${hash}`)
+  } catch (e: any) {
+    alert(e?.shortMessage || e?.message || 'Buy failed')
+  } finally { setBusy(false) }
+}
 
   const doSell = async () => {
-    if (!isConnected) { connect({ connector: injectedConnector }); return }
-    if (!curve) return alert('Missing curve address')
-    if (!guardChain()) return
-    if (!wallet) return alert('Wallet not ready')
+  if (!isConnected) { connect({ connector: injectedConnector }); return }
+  if (!curve) return alert('Missing curve address')
+  if (!guardChain()) return
+  if (!wallet) return alert('Wallet not ready')
 
-    setBusy(true)
+  setBusy(true)
+  try {
+    const amountIn = parseEther(tokIn || '0')
+    if (amountIn <= 0n) { alert('Enter a token amount'); return }
+
+    // Get sane fee caps from the RPC (fallback if estimation fails)
+    let maxFeePerGas: bigint | undefined
+    let maxPriorityFeePerGas: bigint | undefined
     try {
-      const amountIn = parseEther(tokIn || '10')
-      await wallet.writeContract({
-        account: address as `0x${string}`,
-        chain: abstractSepolia,
-        address: curve as `0x${string}`,
-        abi: TokenABI,
-        functionName: 'sellTokens',
-        args: [amountIn, 0n], // minEthOut = 0n placeholder; wire slippage as desired
-      })
-      alert('Sell sent')
-    } catch (e: any) {
-      alert(e?.shortMessage || e?.message || 'Sell failed')
-    } finally { setBusy(false) }
+      const fees = await publicClient.estimateFeesPerGas()
+      maxFeePerGas = fees.maxFeePerGas
+      maxPriorityFeePerGas = fees.maxPriorityFeePerGas
+    } catch {
+      maxPriorityFeePerGas = parseGwei('1')
+      maxFeePerGas = parseGwei('2')
+    }
+
+    // Simulate to lock gas limit & calldata, and catch reverts early
+    const sim = await publicClient.simulateContract({
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
+      address: curve as `0x${string}`,
+      abi: TokenABI,
+      functionName: 'sellTokens',
+      // Use minEthOut = 1n to avoid “zero-min” edge cases
+      args: [amountIn, 1n],
+    })
+
+    // Send exactly what we simulated, with explicit EIP-1559 fee caps
+    const hash = await wallet.writeContract({
+      ...sim.request,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+    })
+
+    alert(`Sell sent: ${hash}`)
+  } catch (e: any) {
+    alert(e?.shortMessage || e?.message || 'Sell failed')
+  } finally {
+    setBusy(false)
   }
+}
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
   const iframeCode = `<iframe
