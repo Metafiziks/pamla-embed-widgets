@@ -78,42 +78,44 @@ async function legacyCaps() {
   setBusy(true)
   try {
     const value = parseEther(ethIn || '0.01')
-    const caps = await legacyCaps()
 
-    // estimate gas with legacy caps
-    const gas = await publicClient.estimateContractGas({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
-      address: curve as `0x${string}`,
-      abi: TokenABI,
-      functionName: 'buyExactEth',
-      args: [0n],
-      value,
-      ...caps,
-    })
-
-    // simulate with the same legacy caps + gas
+    // 1) simulate with your public client (already used elsewhere)
     const sim = await publicClient.simulateContract({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'buyExactEth',
       args: [0n],
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
       value,
-      ...caps,
-      gas,
     })
 
-    // send exactly what we simulated (includes type: 'legacy' & gasPrice)
-    const hash = await wallet.writeContract(sim.request)
-    alert(`Buy sent: ${hash}`)
+    // 2) gentle EIP-1559 caps
+    const fees = await publicClient.estimateFeesPerGas({ chain: abstractSepolia })
+    const maxFeePerGas        = fees.maxFeePerGas  ?? (1_000_000_000n)       // 1 gwei fallback
+    const maxPriorityFeePerGas= fees.maxPriorityFeePerGas ?? (100_000_000n)  // 0.1 gwei fallback
+
+    console.log('[buy] gas', sim.request.gas?.toString(), 'caps',
+      String(maxFeePerGas), String(maxPriorityFeePerGas))
+
+    // 3) send (NOTE: no `type`, no `gasPrice`, keep sim.gas)
+    const hash = await wallet.writeContract({
+      ...sim.request,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+    })
+
+    await publicClient.waitForTransactionReceipt({ hash })
+    alert('Buy sent')
   } catch (e: any) {
+    console.error('[buy] error', e)
     alert(e?.shortMessage || e?.message || 'Buy failed')
-  } finally { setBusy(false) }
+  } finally {
+    setBusy(false)
+  }
 }
 
-  const doSell = async () => {
+ const doSell = async () => {
   if (!isConnected) { connect({ connector: injectedConnector }); return }
   if (!curve) return alert('Missing curve address')
   if (!guardChain()) return
@@ -121,39 +123,41 @@ async function legacyCaps() {
 
   setBusy(true)
   try {
-    const amountIn = parseEther(tokIn || '0')
-    if (amountIn <= 0n) { alert('Enter a token amount'); return }
+    const amountIn = parseEther(tokIn || '10')
 
-    const caps = await legacyCaps()
-
-    // estimate w/ legacy caps
-    const gas = await publicClient.estimateContractGas({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
-      address: curve as `0x${string}`,
-      abi: TokenABI,
-      functionName: 'sellTokens',
-      args: [amountIn, 1n],   // 1 wei min-out avoids zero edge case
-      ...caps,
-    })
-
-    // simulate w/ same caps
+    // 1) simulate sell (your token = curve)
     const sim = await publicClient.simulateContract({
-      account: address as `0x${string}`,
-      chain: abstractSepolia,
       address: curve as `0x${string}`,
       abi: TokenABI,
       functionName: 'sellTokens',
-      args: [amountIn, 1n],
-      ...caps,
-      gas,
+      args: [amountIn, 1n], // 1 wei min out to avoid zero edge-case
+      account: address as `0x${string}`,
+      chain: abstractSepolia,
     })
 
-    const hash = await wallet.writeContract(sim.request)
-    alert(`Sell sent: ${hash}`)
+    // 2) EIP-1559 fee caps
+    const fees = await publicClient.estimateFeesPerGas({ chain: abstractSepolia })
+    const maxFeePerGas         = fees.maxFeePerGas        ?? (1_000_000_000n)
+    const maxPriorityFeePerGas = fees.maxPriorityFeePerGas?? (100_000_000n)
+
+    console.log('[sell] gas', sim.request.gas?.toString(), 'caps',
+      String(maxFeePerGas), String(maxPriorityFeePerGas))
+
+    // 3) send (keep sim.gas, no `type`, no `gasPrice`)
+    const hash = await wallet.writeContract({
+      ...sim.request,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+    })
+
+    await publicClient.waitForTransactionReceipt({ hash })
+    alert('Sell sent')
   } catch (e: any) {
+    console.error('[sell] error', e)
     alert(e?.shortMessage || e?.message || 'Sell failed')
-  } finally { setBusy(false) }
+  } finally {
+    setBusy(false)
+  }
 }
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
