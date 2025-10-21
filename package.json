@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && tsc -p tsconfig.scripts.json",
+    "build": "next build",
     "start": "next start",
     "leaderboard": "node --loader ts-node/esm --no-warnings scripts/volume-aggregator.ts"
   },
