@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "leaderboard": "npx ts-node --transpile-only --esm scripts/volume-aggregator.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.87.4",
