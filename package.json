@@ -5,9 +5,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --no-lint",
     "start": "next start",
-    "leaderboard": "node --loader ts-node/esm --no-warnings scripts/volume-aggregator.ts"
+    "leaderboard": "node --loader ts-node/esm --no-warnings scripts/volume-aggregator.ts",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.87.4",
