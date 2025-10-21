@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build && tsc -p tsconfig.scripts.json",
     "start": "next start",
-    "leaderboard": "node dist-scripts/volume-aggregator.js"
+    "leaderboard": "node --loader ts-node/esm --no-warnings scripts/volume-aggregator.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.87.4",
