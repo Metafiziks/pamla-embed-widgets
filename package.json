@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && tsc scripts/volume-aggregator.ts --outDir dist-scripts",
+    "build": "next build && tsc -p tsconfig.scripts.json",
     "start": "next start",
     "leaderboard": "node dist-scripts/volume-aggregator.js"
   },
@@ -25,6 +25,6 @@
     "@types/react": "^19.1.12",
     "encoding": "^0.1.13",
     "pino-pretty": "^13.1.1",
-    "typescript": "^5.9.3"
+    "typescript": "5.4.5"
   }
 }
