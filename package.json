@@ -22,7 +22,6 @@
     "wagmi": "2.12.10"
   },
   "devDependencies": {
-    "@types/next": "^8.0.7",
     "@types/node": "^24.3.1",
     "@types/react": "^19.1.12",
     "encoding": "^0.1.13",
