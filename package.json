@@ -5,9 +5,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && tsc scripts/volume-aggregator.ts --outDir dist-scripts",
     "start": "next start",
-    "leaderboard": "npx ts-node --transpile-only --esm scripts/volume-aggregator.ts"
+    "leaderboard": "node dist-scripts/volume-aggregator.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.87.4",
