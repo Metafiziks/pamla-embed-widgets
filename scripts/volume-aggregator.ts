@@ -1,7 +1,7 @@
 // scripts/volume-aggregator.ts
 // Aggregates Buy/Sell volume from your BondingCurveToken and persists to Render Disk.
 
-import { mkdir, writeFile } from 'node:fs/promises'
+import { existsSync, mkdirSync, writeFileSync, mkdir, writeFile } from 'node:fs'
 import path from 'node:path'
 import { createPublicClient, http, formatEther } from 'viem'
 
@@ -17,7 +17,7 @@ const STEP      = BigInt(process.env.STEP || '3000')           // blocks per get
 const TOP_N     = Number(process.env.TOP_N || '100')           // limit in the JSON (CSV writes all)
 
 // disk output
-const OUT_DIR   = process.env.OUT_DIR || '/data/leaderboard'   // Render Disk mount path (persisted)
+const OUT_DIR   = process.env.OUT_DIR || '/opt/render/data/leaderboard'
 
 // ====== Types ======
 type Totals = {
@@ -50,8 +50,8 @@ const client = createPublicClient({
 })
 
 // ====== Helpers ======
-async function ensureDir(p: string) {
-  await mkdir(p, { recursive: true })
+function ensureDir(p: string) {
+  if (!existsSync(p)) mkdirSync(p, { recursive: true })
 }
 
 function toCsv(rows: Totals[]): string {
@@ -178,6 +178,7 @@ async function main() {
 
   // Write JSON (strings for bigints)
   const jsonPath = path.join(OUT_DIR, 'participants_volume.json')
+  writeFileSync(jsonPath, JSON.stringify(jsonOut, null, 2))
   const jsonOut = rows.slice(0, TOP_N).map(r => ({
     address: r.address,
     buyEth: r.buyEth.toString(),
@@ -194,6 +195,7 @@ async function main() {
 
   // Write CSV (all rows)
   const csvPath = path.join(OUT_DIR, 'participants_volume.csv')
+  writeFileSync(csvPath, toCsv(rows))
   await writeFile(csvPath, toCsv(rows), 'utf8')
   console.log(`✅ wrote ${csvPath} (${rows.length} addrs)`)
 
