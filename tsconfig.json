@@ -7,7 +7,7 @@
       "es2020"
     ],
     "allowJs": true,
-    "types": ["node"],
+    "types": ["node", "next"],
     "skipLibCheck": true,
     "strict": false,
     "forceConsistentCasingInFileNames": true,
@@ -17,6 +17,7 @@
     "moduleResolution": "node16",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
     "jsx": "preserve",
     "baseUrl": ".",
     "paths": {

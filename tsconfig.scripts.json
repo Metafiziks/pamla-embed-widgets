@@ -4,5 +4,6 @@
     "noEmit": false,
     "outDir": "dist-scripts"
   },
-  "include": ["scripts/volume-aggregator.ts"]
+  "include": ["scripts/volume-aggregator.ts"],
+  "exclude": ["app", "pages", "components"]
 }
