@@ -176,6 +176,8 @@ async function main() {
   // Ensure output dir on Render Disk
   await ensureDir(OUT_DIR)
 
+  console.log("Writing output to", OUT_DIR);
+
   // Write JSON (strings for bigints)
   const jsonPath = path.join(OUT_DIR, 'participants_volume.json')
   writeFileSync(jsonPath, JSON.stringify(jsonOut, null, 2))
@@ -202,7 +204,12 @@ async function main() {
   console.log('Done.')
 }
 
-main().catch((e) => {
-  console.error('FAILED:', e?.message || e)
-  process.exit(1)
-})
+main()
+  .then(() => {
+    console.log("✅ Aggregation complete");
+    process.exit(0);
+  })
+  .catch((e) => {
+    console.error("❌ FAILED:", e instanceof Error ? e.stack || e.message : e);
+    process.exit(1);
+  });
