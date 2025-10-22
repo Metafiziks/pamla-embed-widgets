@@ -193,6 +193,33 @@ async function main() {
     lastBlock: r.lastBlock.toString(),
   }));
 
+// AFTER computing `jsonOut` (array) and before exiting:
+
+const WEB_BASE_URL = process.env.WEB_BASE_URL // e.g. https://pamla-embed-widgets.onrender.com
+const CRON_SECRET  = process.env.LEADERBOARD_SECRET // same value as on web service
+
+if (WEB_BASE_URL && CRON_SECRET) {
+  try {
+    const res = await fetch(`${WEB_BASE_URL}/api/leaderboard/upload`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-cron-secret': CRON_SECRET,
+      },
+      body: JSON.stringify(jsonOut),
+    })
+    if (!res.ok) {
+      console.error('Upload failed:', res.status, await res.text())
+    } else {
+      console.log('✅ Uploaded leaderboard to web app')
+    }
+  } catch (e: any) {
+    console.error('Upload error:', e?.message || e)
+  }
+} else {
+  console.log('Skipping upload: WEB_BASE_URL or LEADERBOARD_SECRET unset')
+}
+
   const jsonPath = path.join(OUT_DIR, "participants_volume.json");
   writeFileSync(jsonPath, JSON.stringify(jsonOut, null, 2));
   console.log(`✅ wrote ${jsonPath} (${jsonOut.length} addrs)`);
@@ -203,6 +230,8 @@ async function main() {
 
   console.log("Done.");
 }
+
+
 
 // Strong top-level catch
 (async () => {
