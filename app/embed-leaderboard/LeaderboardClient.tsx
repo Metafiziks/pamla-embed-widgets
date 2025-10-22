@@ -1,36 +1,43 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { formatEther } from 'viem'
 
 type ApiRow = {
   address: `0x${string}`
-  buyVolumeEth?: number
-  sellVolumeEth?: number
-  totalVolumeEth?: number
+  buyEth: string
+  sellEth: string
+  totalEth: string
+  buyTokens: string
+  sellTokens: string
+  buyCount: number
+  sellCount: number
+  lastBlock: string
 }
 
-type ApiPayload = {
-  generatedAt?: string
-  rows: ApiRow[]
+type Row = {
+  address: `0x${string}`
+  totalEth: bigint
 }
 
 const PAGE_SIZE = 25
+const DS_PATH =
+  (process.env.NEXT_PUBLIC_LEADERBOARD_PATH || '/api/leaderboard') as string
 
 export default function LeaderboardClient() {
-  // Point this at your route if you mounted the API somewhere else.
-  // e.g. NEXT_PUBLIC_LEADERBOARD_API="https://your-app.onrender.com/api/leaderboard"
-  const endpoint =
-    (process.env.NEXT_PUBLIC_LEADERBOARD_API || '/api/leaderboard') as string
-
-  const [rows, setRows] = useState<ApiRow[]>([])
+  const [rows, setRows] = useState<Row[]>([])
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [page, setPage] = useState(1)
+  const [fetchedAt, setFetchedAt] = useState<string>('')
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
-  const pageRows = useMemo(
-    () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [rows, page]
+  // stable number formatter (no rounding surprises)
+  const fmt = useMemo(
+    () =>
+      new Intl.NumberFormat(undefined, {
+        maximumFractionDigits: 6,
+      }),
+    []
   )
 
   useEffect(() => {
@@ -39,26 +46,37 @@ export default function LeaderboardClient() {
       setLoading(true)
       setError(null)
       try {
-        const res = await fetch(endpoint, { cache: 'no-store' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = (await res.json()) as ApiPayload
+        const res = await fetch(DS_PATH, { cache: 'no-store' })
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`)
+        }
+        // 304 handling: treat as no change
+        if (res.status === 304) {
+          if (!cancelled) setLoading(false)
+          return
+        }
+        const data = (await res.json()) as unknown
 
-        // Normalize + sort by totalVolumeEth desc
-        const normalized = (data.rows || []).map(r => ({
-          address: r.address,
-          buyVolumeEth: r.buyVolumeEth ?? 0,
-          sellVolumeEth: r.sellVolumeEth ?? 0,
-          totalVolumeEth:
-            r.totalVolumeEth ??
-            (r.buyVolumeEth ?? 0) + (r.sellVolumeEth ?? 0),
-        }))
-
-        normalized.sort(
-          (a, b) => (b.totalVolumeEth || 0) - (a.totalVolumeEth || 0)
-        )
+        // Defensive parsing
+        const arr = Array.isArray(data) ? (data as ApiRow[]) : []
+        const mapped: Row[] = arr
+          .map((r) => {
+            try {
+              // BigInt from string; fall back to 0n
+              const total = r?.totalEth ? BigInt(r.totalEth) : 0n
+              const addr = (r?.address || '').toLowerCase() as `0x${string}`
+              if (!addr.startsWith('0x') || addr.length !== 42) return null
+              return { address: addr, totalEth: total }
+            } catch {
+              return null
+            }
+          })
+          .filter((x): x is Row => !!x)
+          .sort((a, b) => (a.totalEth === b.totalEth ? 0 : b.totalEth > a.totalEth ? 1 : -1))
 
         if (!cancelled) {
-          setRows(normalized)
+          setRows(mapped)
+          setFetchedAt(new Date().toLocaleTimeString())
           setPage(1)
         }
       } catch (e: any) {
@@ -70,39 +88,20 @@ export default function LeaderboardClient() {
     return () => {
       cancelled = true
     }
-  }, [endpoint])
+  }, [])
 
-  const origin =
-    typeof window !== 'undefined' ? window.location.origin : ''
-  const iframeCode = `<iframe src="${origin}/embed-leaderboard" width="100%" height="720" style="border:0;background:transparent" loading="lazy"></iframe>`
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   return (
     <div style={{ fontFamily: 'ui-sans-serif,system-ui,Arial', color: '#f2f2f2' }}>
       <div className="card" style={{ background: '#0e0e10', marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <b>Leaderboard</b>
-          <small style={{ opacity: .8 }}>
-            Data source: <code style={{ opacity: .8 }}>{endpoint}</code>
-          </small>
-        </div>
-
-        {/* Optional: quick embed helper (toggle with ?admin=1) */}
-        {typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('admin') === '1' && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 12, opacity: .9, marginBottom: 6 }}><b>Admin Leaderboard Embed</b></div>
-            <button
-              onClick={async () => {
-                await navigator.clipboard.writeText(iframeCode)
-                alert('Embed code copied!')
-              }}
-            >
-              Copy iframe
-            </button>
-            <pre style={{ whiteSpace: 'pre-wrap', marginTop: 8, fontSize: 12, opacity: .85 }}>
-              {iframeCode}
-            </pre>
+          <div style={{ fontSize: 12, opacity: 0.8 }}>
+            Data source: <code style={{ opacity: 0.9 }}>{DS_PATH}</code>
           </div>
-        )}
+        </div>
       </div>
 
       {loading && <div>Loading…</div>}
@@ -112,31 +111,43 @@ export default function LeaderboardClient() {
         <div className="card">
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ textAlign: 'left', fontSize: 12, opacity: .8 }}>
+              <tr style={{ textAlign: 'left', fontSize: 12, opacity: 0.8 }}>
                 <th style={{ padding: '8px' }}>#</th>
                 <th style={{ padding: '8px' }}>Address</th>
                 <th style={{ padding: '8px' }}>Volume (ETH)</th>
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((r, i) => (
-                <tr key={r.address} style={{ borderTop: '1px solid #222' }}>
-                  <td style={{ padding: '8px' }}>{(page - 1) * PAGE_SIZE + i + 1}</td>
-                  <td style={{ padding: '8px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-                    {r.address.slice(0, 6)}…{r.address.slice(-4)}
-                  </td>
-                  <td style={{ padding: '8px' }}>
-                    {formatVolume(r.totalVolumeEth)}
+              {pageRows.length === 0 ? (
+                <tr>
+                  <td colSpan={3} style={{ padding: '12px', opacity: 0.8 }}>
+                    No data yet.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                pageRows.map((r, i) => (
+                  <tr key={r.address} style={{ borderTop: '1px solid #222' }}>
+                    <td style={{ padding: '8px' }}>{(page - 1) * PAGE_SIZE + i + 1}</td>
+                    <td style={{ padding: '8px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                      {r.address.slice(0, 6)}…{r.address.slice(-4)}
+                    </td>
+                    <td style={{ padding: '8px' }}>{fmt.format(Number(formatEther(r.totalEth)))}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>Prev</button>
-            <div style={{ fontSize: 12, opacity: .85 }}>Page {page} / {totalPages}</div>
-            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next</button>
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+              Prev
+            </button>
+            <div style={{ fontSize: 12, opacity: 0.85 }}>
+              Page {page} / {totalPages} · {rows.length} addrs · fetched {fetchedAt || '—'}
+            </div>
+            <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>
+              Next
+            </button>
           </div>
         </div>
       )}
@@ -148,10 +159,4 @@ export default function LeaderboardClient() {
       `}</style>
     </div>
   )
-}
-
-function formatVolume(v?: number) {
-  if (!v || !isFinite(v)) return '0'
-  // 4 d.p. feels right for small totals; tweak if you want fewer decimals
-  return Number(v).toFixed(4)
 }
