@@ -18,9 +18,9 @@ const PAGE_SIZE = 25
 
 export default function LeaderboardClient() {
   // Point this at your route if you mounted the API somewhere else.
-  // e.g. NEXT_PUBLIC_LEADERBOARD_API="https://your-app.onrender.com/api/leaderboard-volume"
+  // e.g. NEXT_PUBLIC_LEADERBOARD_API="https://your-app.onrender.com/api/leaderboard"
   const endpoint =
-    (process.env.NEXT_PUBLIC_LEADERBOARD_API || '/api/leaderboard-volume') as string
+    (process.env.NEXT_PUBLIC_LEADERBOARD_API || '/api/leaderboard') as string
 
   const [rows, setRows] = useState<ApiRow[]>([])
   const [loading, setLoading] = useState(false)
